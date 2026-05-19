@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>
+      ROSView — MCAP, ROS bag, ROS 2 db3, HDF5 &amp; BVH visualization in the browser | io-ai.tech
+    </title>
+    <meta
+      name="description"
+      content="ROSView: open, inspect, replay, and visualize robotics data in your browser. Supports MCAP, ROS 1/2 bag, ROS 2 db3, HDF5, and BVH—built for ROS debugging and analysis without a desktop viewer."
+    />
+    <meta
+      name="keywords"
+      content="ROS,ROS 2,robotics visualization,ROS data visualization,MCAP,MCAP viewer,ROS bag,rosbag,ROS2 db3,db3 viewer,HDF5,HDF5 viewer,BVH,BVH viewer,topic visualization,web viewer,browser,ROSView,io-ai.tech"
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="author" content="IO-AI Tech — ROSView" />
+
+    <link rel="alternate" hreflang="en" href="https://io-ai.tech/rosview/?lang=en" />
+    <link rel="alternate" hreflang="zh-CN" href="https://io-ai.tech/rosview/?lang=zh-CN" />
+    <link rel="alternate" hreflang="ja" href="https://io-ai.tech/rosview/?lang=ja" />
+    <link rel="alternate" hreflang="x-default" href="https://io-ai.tech/rosview/?lang=en" />
+
+    <link rel="canonical" href="https://io-ai.tech/rosview/?lang=en" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ROSView" />
+    <meta property="og:url" content="https://io-ai.tech/rosview/?lang=en" />
+    <meta
+      property="og:title"
+      content="ROSView — MCAP, ROS bag, ROS 2 db3, HDF5 &amp; BVH visualization in the browser"
+    />
+    <meta
+      property="og:description"
+      content="Open, inspect, replay, and visualize robotics data in your browser. Supports MCAP, ROS bag, ROS 2 db3, HDF5, and BVH for ROS debugging and analysis."
+    />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+    <meta property="og:locale:alternate" content="ja_JP" />
+    <meta property="og:image" content="https://io-ai.tech/rosview/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="ROSView: MCAP, ROS bag, db3, HDF5, and BVH visualization in the browser"
+    />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://io-ai.tech/rosview/og-image.png" />
+    <meta
+      name="twitter:title"
+      content="ROSView — MCAP, ROS bag, ROS 2 db3, HDF5 &amp; BVH visualization in the browser"
+    />
+    <meta
+      name="twitter:description"
+      content="Visualize MCAP, ROS bag, ROS 2 db3, HDF5, and BVH in the browser. Built for ROS debugging and analysis."
+    />
+
+    <script id="rosview-seo-ldjson" type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "ROSView",
+        "url": "https://io-ai.tech/rosview/?lang=en",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Any",
+        "browserRequirements": "Requires JavaScript. Modern evergreen browser recommended.",
+        "description": "Web-based robotics data visualization and playback: MCAP, ROS 1/2 bag, ROS 2 db3, HDF5, and BVH in the browser for ROS debugging and analysis.",
+        "inLanguage": ["en", "zh-CN", "ja"],
+        "sameAs": ["https://io-ai.tech/", "https://rosview.com/"],
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+    <script>
+      (function () {
+        var SEO_ORIGIN = 'https://io-ai.tech';
+        var SEO_PATH = '/rosview/';
+        var SEO_BASE = SEO_ORIGIN + SEO_PATH;
+        var OG_IMAGE = SEO_BASE + 'og-image.png';
+
+        function parseUiLanguage(search) {
+          try {
+            var params = new URLSearchParams(search.startsWith('?') ? search : '?' + search);
+            var raw = (params.get('lang') || params.get('language') || '').trim();
+            if (!raw) return 'en';
+            var lower = raw.toLowerCase().replace(/_/g, '-');
+            if (lower === 'zh' || lower === 'zh-cn' || lower === 'zhcn' || lower.indexOf('zh-cn') === 0)
+              return 'zh';
+            if (lower === 'ja' || lower === 'ja-jp' || lower.indexOf('ja-') === 0) return 'ja';
+            if (lower === 'en' || lower === 'en-us' || lower === 'en-gb' || lower.indexOf('en-') === 0)
+              return 'en';
+            return 'en';
+          } catch {
+            return 'en';
+          }
+        }
+
+        function seoLangQuery(ui) {
+          if (ui === 'zh') return 'zh-CN';
+          if (ui === 'ja') return 'ja';
+          return 'en';
+        }
+
+        function pageUrl(ui) {
+          return SEO_BASE + '?lang=' + encodeURIComponent(seoLangQuery(ui));
+        }
+
+        function htmlLang(ui) {
+          if (ui === 'zh') return 'zh-CN';
+          if (ui === 'ja') return 'ja';
+          return 'en-US';
+        }
+
+        function ogLocale(ui) {
+          if (ui === 'zh') return 'zh_CN';
+          if (ui === 'ja') return 'ja_JP';
+          return 'en_US';
+        }
+
+        var ui = parseUiLanguage(typeof location !== 'undefined' ? location.search : '');
+        var canonical = pageUrl(ui);
+
+        if (typeof document !== 'undefined') {
+          document.documentElement.lang = htmlLang(ui);
+
+          var canonicalLink = document.querySelector('link[rel="canonical"]');
+          if (canonicalLink) canonicalLink.setAttribute('href', canonical);
+
+          var ogUrl = document.querySelector('meta[property="og:url"]');
+          if (ogUrl) ogUrl.setAttribute('content', canonical);
+
+          var ogLoc = document.querySelector('meta[property="og:locale"]');
+          if (ogLoc) ogLoc.setAttribute('content', ogLocale(ui));
+
+          var ld = document.getElementById('rosview-seo-ldjson');
+          if (ld && ld.textContent) {
+            try {
+              var data = JSON.parse(ld.textContent);
+              data.url = canonical;
+              ld.textContent = JSON.stringify(data);
+            } catch {
+              /* keep static JSON-LD */
+            }
+          }
+        }
+
+        if (typeof window !== 'undefined') {
+          window.__ROSVIEW_SEO__ = {
+            canonical: canonical,
+            seoBase: SEO_BASE,
+            ogImage: OG_IMAGE,
+            uiLanguage: ui,
+          };
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/entrypoints/main.tsx"></script>
+  </body>
+</html>

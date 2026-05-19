@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Documentation"
+    url: https://github.com/ioai-tech/rosview/tree/main/docs
+    about: "Read the API reference, embedding guide, and development docs"
+  - name: "Security vulnerability"
+    url: https://github.com/ioai-tech/rosview/security/advisories/new
+    about: "Report a security vulnerability privately"
+  - name: "GitHub Discussions"
+    url: https://github.com/ioai-tech/rosview/discussions
+    about: "Ask questions or share ideas"
+  - name: "Live Demo"
+    url: https://rosview.com
+    about: "Try ROS View online"
