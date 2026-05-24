@@ -1,6 +1,10 @@
 import type { MeshStrategy } from './recipe';
 
+export type UrdfSourceType = 'file' | 'topic';
+
 export interface UrdfDebugConfig {
+  urdfSourceType: UrdfSourceType;
+  urdfTopic: string;
   jointStateTopic: string;
   urdfFileName: string;
   urdfFileContent: string;
@@ -23,6 +27,8 @@ export const MIN_SETTINGS_PANEL_PERCENT = 22;
 export const MAX_SETTINGS_PANEL_PERCENT = 58;
 
 export const defaultUrdfDebugConfig = (): UrdfDebugConfig => ({
+  urdfSourceType: 'file',
+  urdfTopic: '',
   jointStateTopic: '',
   urdfFileName: '',
   urdfFileContent: '',

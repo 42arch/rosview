@@ -11,6 +11,8 @@ import { type UrdfDebugConfig } from './defaults';
 import { parseUrdfDebugConfig } from './schema';
 
 const KNOWN_KEYS = [
+  'urdfSourceType',
+  'urdfTopic',
   'jointStateTopic',
   'urdfFileName',
   'urdfFileContent',
@@ -42,6 +44,8 @@ function fromConfig(config: FoxgloveConfig): FoxgloveAdapterDecoded<UrdfDebugCon
 
 function toConfig(state: FoxgloveAdapterState<UrdfDebugConfig>): FoxgloveConfig {
   const known: FoxgloveConfig = {
+    urdfSourceType: state.config.urdfSourceType,
+    urdfTopic: state.config.urdfTopic,
     jointStateTopic: state.config.jointStateTopic,
     urdfFileName: state.config.urdfFileName,
     urdfFileContent: state.config.urdfFileContent,

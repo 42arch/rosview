@@ -5,6 +5,32 @@ export type JointStateLike = {
   position: number[];
 };
 
+function isArrayLike(value: unknown): value is ArrayLike<unknown> {
+  return value != null && typeof value === 'object' && 'length' in value;
+}
+
+/** Read JointState fields from a decoded ROS message (plain or typed arrays). */
+export function readJointStateFromMessage(message: unknown): JointStateLike | null {
+  if (!message || typeof message !== 'object') return null;
+  const msg = message as Record<string, unknown>;
+  const name = msg.name;
+  const position = msg.position;
+  if (!isArrayLike(name) || !isArrayLike(position)) return null;
+  if (name.length === 0) return null;
+
+  const names: string[] = [];
+  for (let index = 0; index < name.length; index += 1) {
+    const entry = name[index];
+    if (typeof entry !== 'string') return null;
+    names.push(entry);
+  }
+
+  return {
+    name: names,
+    position: Array.from(position as ArrayLike<number>, (value) => Number(value) || 0),
+  };
+}
+
 function readPosition(positions: ArrayLike<number>, index: number): number {
   const value = positions[index];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;

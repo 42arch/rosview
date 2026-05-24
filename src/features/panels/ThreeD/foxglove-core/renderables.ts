@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 
 import { composeJointTransform, parseUrdf } from './urdf';
@@ -21,13 +22,42 @@ export type RobotRenderable = {
   rootFrameId: string | undefined;
   frameObjects: Array<{ frameId: string; object: THREE.Object3D }>;
   hasRealtimeTf: boolean;
+  kinematicState: RobotKinematicState;
 };
+
+type KinematicFramePose = {
+  matrix: THREE.Matrix4;
+  position: THREE.Vector3;
+  rotation: THREE.Quaternion;
+};
+
+type RobotKinematicState = {
+  childrenByParent: Map<string, string[]>;
+  parentByChild: Map<string, string>;
+  localByChild: Map<string, THREE.Matrix4>;
+  poseByFrame: Map<string, KinematicFramePose>;
+};
+
+const UNIT_SCALE = new THREE.Vector3(1, 1, 1);
+const SCRATCH_REL_MATRIX = new THREE.Matrix4();
+const SCRATCH_DECOMPOSE_SCALE = new THREE.Vector3(1, 1, 1);
 
 export type MeshLoadProgress = {
   total: number;
   loaded: number;
   failed: number;
 };
+
+export const SUPPORTED_MESH_EXTENSIONS = ['stl', 'dae', 'obj'] as const;
+export type SupportedMeshExtension = (typeof SUPPORTED_MESH_EXTENSIONS)[number];
+
+export function getMeshExtensionFromUrl(meshUrl: string): string | undefined {
+  return meshUrl.split('?')[0]?.split('.').pop()?.toLowerCase();
+}
+
+export function isSupportedMeshExtension(ext: string | undefined): ext is SupportedMeshExtension {
+  return ext === 'stl' || ext === 'dae' || ext === 'obj';
+}
 
 type BuildRobotRenderableOptions = {
   resolveMeshUrl: (rawPath: string) => string;
@@ -39,7 +69,8 @@ type BuildRobotRenderableOptions = {
 
 type MeshAsset =
   | { kind: 'stl'; buffer: ArrayBuffer }
-  | { kind: 'dae'; text: string };
+  | { kind: 'dae'; text: string }
+  | { kind: 'obj'; text: string };
 
 type MeshAssetLoadResult =
   | { ok: true; asset: MeshAsset }
@@ -120,7 +151,118 @@ export async function buildRobotRenderable(
     rootFrameId,
     frameObjects,
     hasRealtimeTf: false,
+    kinematicState: buildKinematicState(parsed, rootFrameId),
   };
+}
+
+function createFramePose(): KinematicFramePose {
+  return {
+    matrix: new THREE.Matrix4(),
+    position: new THREE.Vector3(),
+    rotation: new THREE.Quaternion(),
+  };
+}
+
+function matrixFromPose(
+  translation: { x: number; y: number; z: number },
+  rotation: { x: number; y: number; z: number; w: number },
+): THREE.Matrix4 {
+  return new THREE.Matrix4().compose(
+    new THREE.Vector3(translation.x, translation.y, translation.z),
+    new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
+    UNIT_SCALE,
+  );
+}
+
+function ensureKinematicPose(
+  poseByFrame: Map<string, KinematicFramePose>,
+  frameId: string,
+): KinematicFramePose {
+  const normalized = normalizeFrameId(frameId);
+  let pose = poseByFrame.get(normalized);
+  if (!pose) {
+    pose = createFramePose();
+    poseByFrame.set(normalized, pose);
+  }
+  return pose;
+}
+
+function buildKinematicState(parsed: ParsedUrdf, rootFrameId: string | undefined): RobotKinematicState {
+  const childrenByParent = new Map<string, string[]>();
+  const parentByChild = new Map<string, string>();
+  const localByChild = new Map<string, THREE.Matrix4>();
+  const poseByFrame = new Map<string, KinematicFramePose>();
+
+  for (const frameId of parsed.frames) {
+    ensureKinematicPose(poseByFrame, frameId);
+  }
+  for (const transform of parsed.transforms) {
+    const parent = normalizeFrameId(transform.parent);
+    const child = normalizeFrameId(transform.child);
+    parentByChild.set(child, parent);
+    const children = childrenByParent.get(parent) ?? [];
+    children.push(child);
+    childrenByParent.set(parent, children);
+    localByChild.set(child, matrixFromPose(transform.translation, transform.rotation));
+    ensureKinematicPose(poseByFrame, parent);
+    ensureKinematicPose(poseByFrame, child);
+  }
+
+  const state = { childrenByParent, parentByChild, localByChild, poseByFrame };
+  recomputeKinematicPoses(state, rootFrameId, parsed.frames);
+  return state;
+}
+
+function recomputeKinematicPoses(
+  state: RobotKinematicState,
+  rootFrameId: string | undefined,
+  frames: string[],
+): void {
+  const visited = new Set<string>();
+  const roots = rootFrameId ? [normalizeFrameId(rootFrameId)] : [];
+  for (const frameId of frames) {
+    const normalized = normalizeFrameId(frameId);
+    if (!state.parentByChild.has(normalized) && !roots.includes(normalized)) {
+      roots.push(normalized);
+    }
+  }
+  for (const parent of state.childrenByParent.keys()) {
+    if (!state.parentByChild.has(parent) && !roots.includes(parent)) {
+      roots.push(parent);
+    }
+  }
+
+  const visit = (frameId: string, parentMatrix?: THREE.Matrix4) => {
+    if (visited.has(frameId)) return;
+    visited.add(frameId);
+    const pose = ensureKinematicPose(state.poseByFrame, frameId);
+    const local = state.localByChild.get(frameId);
+    if (parentMatrix && local) {
+      pose.matrix.multiplyMatrices(parentMatrix, local);
+    } else if (local) {
+      pose.matrix.copy(local);
+    } else {
+      pose.matrix.identity();
+    }
+    pose.matrix.decompose(pose.position, pose.rotation, SCRATCH_DECOMPOSE_SCALE);
+
+    for (const child of state.childrenByParent.get(frameId) ?? []) {
+      visit(child, pose.matrix);
+    }
+  };
+
+  for (const root of roots) {
+    visit(root);
+  }
+}
+
+function resolveDisplayRootFrameId(model: RobotRenderable): string | undefined {
+  return (
+    model.transformTree.getRootFrameId(model.rootFrameId) ??
+    model.rootFrameId ??
+    inferRootFrameId(model.parsed) ??
+    model.parsed.frames[0]
+  );
 }
 
 function inferRootFrameId(parsed: ParsedUrdf): string | undefined {
@@ -278,7 +420,7 @@ async function loadMeshObject(
 ): Promise<THREE.Object3D | undefined> {
   const geometry = visual.geometry as UrdfGeometryMesh;
   const meshUrl = options.resolveMeshUrl(geometry.filename);
-  const ext = meshUrl.split('?')[0]?.split('.').pop()?.toLowerCase();
+  const ext = getMeshExtensionFromUrl(meshUrl);
 
   const asset = await loadMeshAsset(meshUrl, ext);
   if (asset.ok === false) {
@@ -290,6 +432,8 @@ async function loadMeshObject(
     let object: THREE.Object3D | undefined;
     if (asset.asset.kind === 'stl') {
       object = loadStl(asset.asset.buffer, color);
+    } else if (asset.asset.kind === 'obj') {
+      object = loadObj(asset.asset.text, color);
     } else {
       object = loadCollada(asset.asset.text, meshUrl);
     }
@@ -319,7 +463,11 @@ async function loadMeshObject(
       } else {
         hasTexturedMaterial = hasTextureMaterial(mesh.material);
       }
-      if (asset.asset.kind === 'stl' || (usedFallbackMaterial && !hasTexturedMaterial)) {
+      if (
+        asset.asset.kind === 'stl' ||
+        asset.asset.kind === 'obj' ||
+        (usedFallbackMaterial && !hasTexturedMaterial)
+      ) {
         attachMeshOutline(mesh, options.outlineColor ?? '#94a3b8');
       }
     });
@@ -336,7 +484,7 @@ async function loadMeshAsset(meshUrl: string, ext: string | undefined): Promise<
   let cached = meshAssetCache.get(meshUrl);
   if (!cached) {
     cached = (async () => {
-      if (ext !== 'stl' && ext !== 'dae') {
+      if (!isSupportedMeshExtension(ext)) {
         return { ok: false, reason: `unsupported extension: ${ext ?? 'unknown'}` } satisfies MeshAssetLoadResult;
       }
       try {
@@ -346,6 +494,9 @@ async function loadMeshAsset(meshUrl: string, ext: string | undefined): Promise<
         }
         if (ext === 'stl') {
           return { ok: true, asset: { kind: 'stl', buffer: await response.arrayBuffer() } } satisfies MeshAssetLoadResult;
+        }
+        if (ext === 'obj') {
+          return { ok: true, asset: { kind: 'obj', text: await response.text() } } satisfies MeshAssetLoadResult;
         }
         return { ok: true, asset: { kind: 'dae', text: await response.text() } } satisfies MeshAssetLoadResult;
       } catch (error) {
@@ -365,6 +516,21 @@ function loadStl(buffer: ArrayBuffer, color: THREE.Color): THREE.Object3D {
   group.add(mesh);
   group.rotateX(Math.PI / 2);
   return group;
+}
+
+function loadObj(text: string, color: THREE.Color): THREE.Object3D {
+  const object = new OBJLoader().parse(text);
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) {
+      return;
+    }
+    if (!mesh.material || mesh.material instanceof THREE.MeshBasicMaterial) {
+      mesh.material = createFallbackMeshMaterial(color);
+    }
+  });
+  object.rotateX(Math.PI / 2);
+  return object;
 }
 
 function loadCollada(text: string, meshUrl: string): THREE.Object3D {
@@ -411,11 +577,12 @@ export function applyTfMessage(model: RobotRenderable, tfMsg: TFMessage): void {
   }
 }
 
-export function applyJointStates(model: RobotRenderable, jointState: JointStateMsg | null): void {
+export function applyJointStates(model: RobotRenderable, jointState: JointStateMsg | null): number {
   if (!jointState || model.hasRealtimeTf) {
-    return;
+    return 0;
   }
 
+  let applied = 0;
   for (let index = 0; index < jointState.name.length; index += 1) {
     const jointName = jointState.name[index];
     const position = jointState.position[index];
@@ -428,22 +595,51 @@ export function applyJointStates(model: RobotRenderable, jointState: JointStateM
     }
     const transform = composeJointTransform(joint, position);
     model.transformTree.addTransform(joint.parent, joint.child, 0n, transform.translation, transform.rotation);
+    model.kinematicState.localByChild.set(
+      normalizeFrameId(joint.child),
+      matrixFromPose(transform.translation, transform.rotation),
+    );
+    applied += 1;
   }
+  if (applied > 0) {
+    recomputeKinematicPoses(model.kinematicState, model.rootFrameId, model.parsed.frames);
+  }
+  return applied;
 }
 
 export function applyFramePoses(model: RobotRenderable, playbackTimeNs: bigint): void {
-  const rootFrameId =
-    model.transformTree.getRootFrameId(model.rootFrameId) ??
-    model.rootFrameId ??
-    inferRootFrameId(model.parsed) ??
-    model.parsed.frames[0];
+  const rootFrameId = resolveDisplayRootFrameId(model);
 
   if (!rootFrameId) {
     return;
   }
 
   const queryTime = model.hasRealtimeTf ? playbackTimeNs : 0n;
+  const displayRootId = normalizeFrameId(rootFrameId);
+  const rootPose = model.hasRealtimeTf ? undefined : model.kinematicState.poseByFrame.get(displayRootId);
   for (const entry of model.frameObjects) {
+    if (!model.hasRealtimeTf) {
+      const childPose = model.kinematicState.poseByFrame.get(normalizeFrameId(entry.frameId));
+      if (childPose && rootPose) {
+        SCRATCH_REL_MATRIX.copy(rootPose.matrix).invert().multiply(childPose.matrix);
+        SCRATCH_REL_MATRIX.decompose(
+          entry.object.position,
+          entry.object.quaternion,
+          SCRATCH_DECOMPOSE_SCALE,
+        );
+        entry.object.visible = true;
+      } else {
+        const ok = model.transformTree.getRelativeTransformInto(
+          rootFrameId,
+          entry.frameId,
+          queryTime,
+          entry.object.position,
+          entry.object.quaternion,
+        );
+        entry.object.visible = ok;
+      }
+      continue;
+    }
     // Write pose directly into the entry's object to avoid per-frame
     // Vector3/Quaternion/Matrix4 allocations (previously ~3 allocs * N
     // frameObjects * 60Hz = major GC pressure).

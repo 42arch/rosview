@@ -8,7 +8,32 @@ import {
   buildSymmetricPairFromHeuristic,
   buildSymmetricPairRule,
   buildXArm851Rule,
+  readJointStateFromMessage,
 } from './jointStateMapping';
+
+describe('readJointStateFromMessage', () => {
+  it('reads plain arrays', () => {
+    const out = readJointStateFromMessage({
+      name: ['j1', 'j2'],
+      position: [0.1, 0.2],
+    });
+    expect(out).toEqual({ name: ['j1', 'j2'], position: [0.1, 0.2] });
+  });
+
+  it('reads typed arrays from decoded MCAP messages', () => {
+    const out = readJointStateFromMessage({
+      name: ['j1'],
+      position: new Float64Array([1.25]),
+    });
+    expect(out).toEqual({ name: ['j1'], position: [1.25] });
+  });
+
+  it('returns null for invalid payloads', () => {
+    expect(readJointStateFromMessage(null)).toBeNull();
+    expect(readJointStateFromMessage({ name: ['j1'] })).toBeNull();
+    expect(readJointStateFromMessage({ name: [1], position: [0] })).toBeNull();
+  });
+});
 
 describe('applyJointMapping', () => {
   it('renames joints', () => {

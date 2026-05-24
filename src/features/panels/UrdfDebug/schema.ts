@@ -8,6 +8,13 @@ import {
 import type { MeshStrategy } from './recipe';
 
 const MESH_STRATEGIES: readonly MeshStrategy[] = ['localUpload', 'packageBaseUrl', 'leaveAsIs'];
+const URDF_SOURCE_TYPES = ['file', 'topic'] as const;
+
+function parseUrdfSourceType(input: unknown, fallback: UrdfDebugConfig['urdfSourceType']) {
+  return URDF_SOURCE_TYPES.includes(input as UrdfDebugConfig['urdfSourceType'])
+    ? (input as UrdfDebugConfig['urdfSourceType'])
+    : fallback;
+}
 
 function parseRpy(input: unknown, fallback: [number, number, number]): [number, number, number] {
   if (!Array.isArray(input) || input.length !== 3) return fallback;
@@ -41,6 +48,8 @@ export function parseUrdfDebugConfig(input: unknown): UrdfDebugConfig {
     ? (input.meshStrategy as MeshStrategy)
     : base.meshStrategy;
   return {
+    urdfSourceType: parseUrdfSourceType(input.urdfSourceType, base.urdfSourceType),
+    urdfTopic: typeof input.urdfTopic === 'string' ? input.urdfTopic : base.urdfTopic,
     jointStateTopic: typeof input.jointStateTopic === 'string' ? input.jointStateTopic : base.jointStateTopic,
     urdfFileName: typeof input.urdfFileName === 'string' ? input.urdfFileName : base.urdfFileName,
     urdfFileContent:

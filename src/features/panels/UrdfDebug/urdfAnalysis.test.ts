@@ -8,6 +8,8 @@ import {
   filterJointStateTopics,
   isJointStateTopicType,
   pickJointStateTopic,
+  pickRobotDescriptionTopic,
+  readUrdfStringFromMessage,
 } from './urdfAnalysis';
 
 describe('extractUrdfJointDescriptors', () => {
@@ -102,5 +104,29 @@ describe('joint state topic helpers', () => {
 
   it('pickJointStateTopic does not match joint_states suffix on wrong type', () => {
     expect(pickJointStateTopic([topics[0], topics[3]])).toBe('');
+  });
+});
+
+describe('robot description topic helpers', () => {
+  const topics = [
+    { name: '/camera/image', type: 'sensor_msgs/msg/Image' },
+    { name: '/robot_description', type: 'std_msgs/msg/String' },
+    { name: '/foo/robot_description_param', type: 'std_msgs/msg/String' },
+  ];
+
+  it('pickRobotDescriptionTopic prefers exact /robot_description', () => {
+    expect(pickRobotDescriptionTopic(topics)).toBe('/robot_description');
+  });
+
+  it('pickRobotDescriptionTopic honors preferred topic when valid', () => {
+    expect(pickRobotDescriptionTopic(topics, '/foo/robot_description_param')).toBe(
+      '/foo/robot_description_param',
+    );
+  });
+
+  it('readUrdfStringFromMessage extracts data field', () => {
+    expect(readUrdfStringFromMessage({ data: '<robot/>' })).toBe('<robot/>');
+    expect(readUrdfStringFromMessage({ data: '' })).toBeNull();
+    expect(readUrdfStringFromMessage(null)).toBeNull();
   });
 });

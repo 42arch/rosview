@@ -71,6 +71,36 @@ export function prepareUrdfForPreview(
   return applyUrdfVisualCorrection(urdfText, { rotateMeshVisuals, visualRpyOffset });
 }
 
+export function isRobotDescriptionTopicType(_type: string): boolean {
+  return true;
+}
+
+export function filterRobotDescriptionTopics(
+  topics: ReadonlyArray<{ name: string; type: string }>,
+): Array<{ name: string; type: string }> {
+  return topics.filter((topic) => topic.name.includes('robot_description'));
+}
+
+export function pickRobotDescriptionTopic(
+  topics: ReadonlyArray<{ name: string; type: string }>,
+  preferred?: string,
+): string {
+  const robotDescriptionTopics = filterRobotDescriptionTopics(topics);
+  if (preferred) {
+    const preferredTopic = robotDescriptionTopics.find((topic) => topic.name === preferred);
+    if (preferredTopic) return preferredTopic.name;
+  }
+  const exact = robotDescriptionTopics.find((topic) => topic.name === '/robot_description');
+  if (exact) return exact.name;
+  return robotDescriptionTopics[0]?.name ?? '';
+}
+
+export function readUrdfStringFromMessage(message: unknown): string | null {
+  if (!message || typeof message !== 'object') return null;
+  const data = (message as Record<string, unknown>).data;
+  return typeof data === 'string' && data.length > 0 ? data : null;
+}
+
 export function isJointStateTopicType(type: string): boolean {
   return type.includes('JointState');
 }

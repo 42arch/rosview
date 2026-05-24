@@ -7,6 +7,7 @@ import { messageBus } from '@/core/pipeline/messageBus';
 import { scheduleFrame } from '@/shared/utils/rafScheduler';
 import { FileDropZone } from '@/shared/ui/file-drop-zone';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/shared/ui/resizable';
+import { TopicAutocomplete } from '../framework/settings';
 import type { UrdfDebugConfig } from './defaults';
 import {
   MAX_SETTINGS_PANEL_PERCENT,
@@ -17,7 +18,7 @@ import { MeshBaseSection } from './MeshBaseSection';
 import { JointPoseSection } from './JointPoseSection';
 import { pickUrdfFile } from './fileDropUtils';
 import { extractPackageNameFromUrdf } from './meshBaseStatus';
-import type { JointStateLike } from './jointStateMapping';
+import { readJointStateFromMessage, type JointStateLike } from './jointStateMapping';
 import { buildPreviewJointState } from './jointPose';
 import {
   buildLocalMeshUrlMap,
@@ -30,9 +31,11 @@ import {
   createDefaultManualPositions,
   extractUrdfJointDescriptors,
   pickJointStateTopic,
+  pickRobotDescriptionTopic,
   prepareUrdfForPreview,
+  readUrdfStringFromMessage,
 } from './urdfAnalysis';
-import { buildCliCommands, generatePythonScript, generateTypeScriptScript } from './scriptTemplates';
+import { generatePythonScript, generateTypeScriptScript } from './scriptTemplates';
 
 export interface UrdfDebugPanelProps {
   player: Player;
@@ -42,17 +45,20 @@ export interface UrdfDebugPanelProps {
 }
 
 function readJointStateFromTopic(topic: string): JointStateLike | null {
-  const last = messageBus.getLastMessage(topic);
-  if (!last?.message || typeof last.message !== 'object') return null;
-  const msg = last.message as Record<string, unknown>;
-  const name = msg.name;
-  const position = msg.position;
-  if (!Array.isArray(name) || !Array.isArray(position)) return null;
-  if (!name.every((entry) => typeof entry === 'string')) return null;
-  return {
-    name,
-    position: Array.from(position as ArrayLike<number>, (v) => Number(v) || 0),
-  };
+  return readJointStateFromMessage(messageBus.getLastMessage(topic)?.message);
+}
+
+function areJointStatesEqual(a: JointStateLike | null, b: JointStateLike | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.name.length !== b.name.length || a.position.length !== b.position.length) return false;
+  for (let index = 0; index < a.name.length; index += 1) {
+    if (a.name[index] !== b.name[index]) return false;
+  }
+  for (let index = 0; index < a.position.length; index += 1) {
+    if (a.position[index] !== b.position[index]) return false;
+  }
+  return true;
 }
 
 function clampSettingsPanelPercent(value: number): number {
@@ -72,6 +78,7 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
   const [lastError, setLastError] = useState<string | null>(null);
   const [urdfUploadError, setUrdfUploadError] = useState<string | null>(null);
   const [rawJointState, setRawJointState] = useState<JointStateLike | null>(null);
+  const [topicUrdfContent, setTopicUrdfContent] = useState('');
   const meshUrlMapRef = useRef<Map<string, string>>(new Map());
   const layoutWriteTimerRef = useRef<number | null>(null);
 
@@ -81,14 +88,60 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
     return pickJointStateTopic(topics, config.jointStateTopic);
   }, [topics, config.jointStateTopic]);
 
+  const urdfTopic = useMemo(() => {
+    if (config.urdfSourceType !== 'topic') return '';
+    return pickRobotDescriptionTopic(topics, config.urdfTopic);
+  }, [topics, config.urdfSourceType, config.urdfTopic]);
+
   useEffect(() => {
-    if (!config.followLiveJointState || !jointStateTopic) {
+    const subs: { topic: string; subscriberId: string }[] = [];
+    if (config.urdfSourceType === 'topic' && urdfTopic) {
+      subs.push({ topic: urdfTopic, subscriberId: panelId });
+    }
+    if (config.followLiveJointState && jointStateTopic) {
+      subs.push({ topic: jointStateTopic, subscriberId: panelId });
+    }
+    if (subs.length > 0) {
+      player.registerSubscriptions(panelId, subs);
+    } else {
       player.unregisterSubscriptions(panelId);
+    }
+    return () => player.unregisterSubscriptions(panelId);
+  }, [
+    player,
+    panelId,
+    urdfTopic,
+    config.urdfSourceType,
+    jointStateTopic,
+    config.followLiveJointState,
+  ]);
+
+  useEffect(() => {
+    if (config.urdfSourceType !== 'topic' || !urdfTopic) {
+      setTopicUrdfContent('');
       return;
     }
-    player.registerSubscriptions(panelId, [{ topic: jointStateTopic, subscriberId: panelId }]);
-    return () => player.unregisterSubscriptions(panelId);
-  }, [player, panelId, jointStateTopic, config.followLiveJointState]);
+    const applyLatest = () => {
+      const last = messageBus.getLastMessage(urdfTopic);
+      const text = readUrdfStringFromMessage(last?.message);
+      if (text) {
+        setTopicUrdfContent((prev) => (prev === text ? prev : text));
+      }
+    };
+    applyLatest();
+    let cancelPending: (() => void) | null = null;
+    const unsubscribe = messageBus.subscribeTopic(urdfTopic, () => {
+      if (cancelPending) return;
+      cancelPending = scheduleFrame(() => {
+        cancelPending = null;
+        applyLatest();
+      });
+    });
+    return () => {
+      unsubscribe();
+      cancelPending?.();
+    };
+  }, [urdfTopic, config.urdfSourceType]);
 
   useEffect(() => {
     if (!config.followLiveJointState || !jointStateTopic) {
@@ -96,7 +149,8 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
       return;
     }
     const applyLatest = () => {
-      setRawJointState(readJointStateFromTopic(jointStateTopic));
+      const latest = readJointStateFromTopic(jointStateTopic);
+      setRawJointState((prev) => (areJointStatesEqual(prev, latest) ? prev : latest));
     };
     applyLatest();
     let cancelPending: (() => void) | null = null;
@@ -130,12 +184,15 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
     [],
   );
 
+  const rawUrdfContent =
+    config.urdfSourceType === 'file' ? config.urdfFileContent : topicUrdfContent;
+
   const preparedUrdfResult = useMemo(() => {
-    if (!config.urdfFileContent) return { urdf: '', error: null as string | null };
+    if (!rawUrdfContent) return { urdf: '', error: null as string | null };
     try {
       return {
         urdf: prepareUrdfForPreview(
-          config.urdfFileContent,
+          rawUrdfContent,
           config.rotateMeshVisuals,
           config.visualRpyOffset,
         ),
@@ -143,11 +200,11 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
       };
     } catch (error) {
       return {
-        urdf: config.urdfFileContent,
+        urdf: rawUrdfContent,
         error: error instanceof Error ? error.message : String(error),
       };
     }
-  }, [config.urdfFileContent, config.rotateMeshVisuals, config.visualRpyOffset]);
+  }, [rawUrdfContent, config.rotateMeshVisuals, config.visualRpyOffset]);
 
   const preparedUrdf = preparedUrdfResult.urdf;
 
@@ -207,6 +264,7 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
       }
       setConfig((prev) => ({
         ...prev,
+        urdfSourceType: 'file',
         urdfFileName: fileName,
         urdfFileContent: text,
         packageName: prev.packageName || detectedPackage || '',
@@ -246,9 +304,21 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
     [setConfig],
   );
 
-  const handleMeshIssue = useCallback((_meshUrl: string, _reason: string) => {
-    // Mesh issues are surfaced in the 3D preview overlay only.
+  const handleMeshIssue = useCallback((meshUrl: string, reason: string) => {
+    if (meshUrl === 'urdf') {
+      setLastError(reason);
+    }
   }, []);
+
+  const previewEmptyHint = useMemo(() => {
+    if (config.urdfSourceType === 'topic') {
+      if (!urdfTopic) {
+        return formatMessage({ id: 'urdfDebug.preview.emptyTopicNoSelection' });
+      }
+      return formatMessage({ id: 'urdfDebug.preview.emptyTopicWaiting' }, { topic: urdfTopic });
+    }
+    return formatMessage({ id: 'urdfDebug.preview.empty' });
+  }, [config.urdfSourceType, urdfTopic, formatMessage]);
 
   const jointStateForPreview = useMemo(
     () =>
@@ -273,21 +343,72 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
     [config, urdfAnalysis?.robotName],
   );
 
-  const cli = buildCliCommands();
-
   const settingsPanel = (
     <aside className="h-full min-h-0 overflow-y-auto overscroll-y-contain bg-background p-3 space-y-3">
       <Section title={formatMessage({ id: 'urdfDebug.section.input' })}>
-        <FileDropZone
-          accept=".urdf,.xml,application/xml,text/xml"
-          title={formatMessage({ id: 'urdfDebug.upload.dropUrdfTitle' })}
-          hint={formatMessage({ id: 'urdfDebug.upload.dropUrdfHint' })}
-          browseLabel={formatMessage({ id: 'urdfDebug.upload.browse' })}
-          selectedLabel={config.urdfFileName || undefined}
-          error={urdfUploadError ?? lastError}
-          testId="urdf-debug-urdf-upload"
-          onFiles={handleUrdfFiles}
-        />
+        <div className="space-y-1">
+          {(
+            [
+              ['file', 'urdfDebug.input.source.file'],
+              ['topic', 'urdfDebug.input.source.topic'],
+            ] as const
+          ).map(([value, labelId]) => (
+            <label key={value} className="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="radio"
+                name="urdf-input-source"
+                checked={config.urdfSourceType === value}
+                onChange={() =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    urdfSourceType: value,
+                  }))
+                }
+              />
+              {formatMessage({ id: labelId })}
+            </label>
+          ))}
+        </div>
+
+        {config.urdfSourceType === 'file' ? (
+          <FileDropZone
+            accept=".urdf,.xml,application/xml,text/xml"
+            title={formatMessage({ id: 'urdfDebug.upload.dropUrdfTitle' })}
+            hint={formatMessage({ id: 'urdfDebug.upload.dropUrdfHint' })}
+            browseLabel={formatMessage({ id: 'urdfDebug.upload.browse' })}
+            selectedLabel={config.urdfFileName || undefined}
+            error={urdfUploadError ?? lastError}
+            testId="urdf-debug-urdf-upload"
+            onFiles={handleUrdfFiles}
+          />
+        ) : (
+          <div className="space-y-1">
+            <TopicAutocomplete
+              value={config.urdfTopic}
+              onChange={(topic) => setConfig((prev) => ({ ...prev, urdfTopic: topic }))}
+              topics={topics}
+              nameIncludes="robot_description"
+              placeholder="/robot_description"
+            />
+            {urdfTopic ? (
+              <div className="text-[10px] text-muted-foreground">
+                {topicUrdfContent
+                  ? formatMessage(
+                      { id: 'urdfDebug.input.topicLoaded' },
+                      { topic: urdfTopic, bytes: topicUrdfContent.length },
+                    )
+                  : formatMessage({ id: 'urdfDebug.input.topicWaiting' }, { topic: urdfTopic })}
+              </div>
+            ) : (
+              <div className="text-[10px] text-muted-foreground italic">
+                {formatMessage({ id: 'urdfDebug.input.topicAutoDetectHint' })}
+              </div>
+            )}
+            {lastError && config.urdfSourceType === 'topic' && (
+              <div className="text-[10px] text-red-500">{lastError}</div>
+            )}
+          </div>
+        )}
       </Section>
 
       <Section title={formatMessage({ id: 'urdfDebug.section.meshResources' })}>
@@ -295,7 +416,7 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
           config={config}
           setConfig={setConfig}
           urdfAnalysis={urdfAnalysis}
-          urdfFileContent={config.urdfFileContent}
+          urdfFileContent={rawUrdfContent}
           meshFiles={meshFiles}
           setMeshFiles={setMeshFiles}
           resolveMeshUrl={resolveMeshUrl}
@@ -375,8 +496,6 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
             Python
           </ActionButton>
         </div>
-        <div className="text-[10px] font-mono text-muted-foreground break-all mt-2">{cli.ts}</div>
-        <div className="text-[10px] font-mono text-muted-foreground break-all">{cli.py}</div>
       </Section>
     </aside>
   );
@@ -404,14 +523,15 @@ export const UrdfDebugPanel: React.FC<UrdfDebugPanelProps> = ({
       <ResizablePanel id="urdf-preview" className="min-h-0 min-w-0" minSize="30%">
         <div className="h-full min-h-0 overflow-hidden">
           <UrdfDebugPreview
-            player={player}
             urdfText={preparedUrdf}
             jointState={jointStateForPreview}
+            highFrequencyPoseUpdates={config.followLiveJointState}
             resolveMeshUrl={resolveMeshUrl}
             fallbackMeshColor={config.fallbackMeshColor}
             showGrid={config.showGrid}
             showAxes={config.showAxes}
             rotateMeshVisuals={config.rotateMeshVisuals}
+            emptyHint={previewEmptyHint}
             onMeshIssue={handleMeshIssue}
           />
         </div>
