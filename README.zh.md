@@ -8,6 +8,10 @@
 
 支持 **MCAP**、**ROS 1 bag**、**ROS 2 db3**、**HDF5** 与 **BVH** 文件。可作为独立 SPA（零安装，访问 [rosview.com](https://rosview.com)）或作为可嵌入的 npm 包使用。
 
+<p align="center">
+  <video src="docs/assets/rosview-demo.mp4" autoplay loop muted playsinline width="920"></video>
+</p>
+
 ---
 
 ## 文档

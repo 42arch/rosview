@@ -123,11 +123,6 @@ const RobotPreview: React.FC<RobotPreviewProps> = ({
   const meshStatsRef = useRef({ total: 0, failed: 0 });
   const { invalidate } = useThree();
 
-  if (jointStateRef.current !== jointState) {
-    jointStateRef.current = jointState;
-    jointDirtyRef.current = true;
-  }
-
   const applyRobotPose = useCallback(
     (model: RobotRenderable, updateWorldMatrix: boolean) => {
       if (jointDirtyRef.current) {
@@ -154,6 +149,7 @@ const RobotPreview: React.FC<RobotPreviewProps> = ({
   }, [robotModel, applyRobotPose]);
 
   useLayoutEffect(() => {
+    jointStateRef.current = jointState;
     if (!robotModel) return;
     jointDirtyRef.current = true;
     if (highFrequencyPoseUpdates) {
@@ -216,7 +212,6 @@ const RobotPreview: React.FC<RobotPreviewProps> = ({
     [onPreviewBuildResult],
   );
 
-  /* eslint-disable react-hooks/exhaustive-deps -- jointState updates imperatively, not full rebuild */
   useEffect(() => {
     let cancelled = false;
     buildIssuesRef.current = [];
@@ -280,7 +275,6 @@ const RobotPreview: React.FC<RobotPreviewProps> = ({
     onPreviewBuildResult,
     reportBuildResult,
   ]);
-  /* eslint-enable react-hooks/exhaustive-deps */
 
   return robotModel ? <primitive object={robotModel.root} /> : null;
 };
