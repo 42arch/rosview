@@ -235,10 +235,10 @@ describe('buildRobotRenderable mesh formats', () => {
 function getFirstMeshRootRotation(model: Awaited<ReturnType<typeof buildRobotRenderable>>): number {
   const frameEntry = model.frameObjects[0];
   expect(frameEntry).toBeDefined();
-  const visualGroup = frameEntry!.object.children[0];
+  const visualGroup = frameEntry.object.children[0];
   const meshRoot = visualGroup?.children[0];
   expect(meshRoot).toBeDefined();
-  return meshRoot!.rotation.x;
+  return meshRoot.rotation.x;
 }
 
 describe('buildRobotRenderable meshUpAxis', () => {
