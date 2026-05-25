@@ -286,6 +286,8 @@ export interface RosViewerProps {
   onLayoutReady?: (info: { panelCount: number }) => void;
   onPlayerReady?: (ctx: { player: Player; hasSource: boolean }) => void;
   onSourceLoadingChange?: (loading: boolean) => void;
+  /** Sidebar tab id to select on first mount (e.g. extension `sidebarTabs[].id`). */
+  initialSidebarTab?: string;
 }
 
 function resolveLayoutPersistence(
@@ -1158,6 +1160,7 @@ export const RosViewer: React.FC<RosViewerProps> = (props) => {
       layoutStorageKey={layoutStorageKey}
       suppressWelcomePanel={suppressWelcomePanel}
       onLayoutReady={props.onLayoutReady}
+      initialSidebarTab={props.initialSidebarTab}
     />
   ) : null;
 

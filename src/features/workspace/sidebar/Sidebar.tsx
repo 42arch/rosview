@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { useIntl } from 'react-intl';
 import { useMessagePipeline } from '@/core/pipeline/useMessagePipeline';
@@ -32,6 +32,8 @@ interface SidebarProps {
   preferencePersistence: PreferencePersistence;
   extensionContext: RosViewExtensionContext;
   extensions?: RosViewExtension[];
+  /** Tab id to select once on mount when listed in extension or built-in tabs. */
+  initialSidebarTab?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -44,11 +46,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   preferencePersistence,
   extensionContext,
   extensions = [],
+  initialSidebarTab,
 }) => {
   const { formatMessage } = useIntl();
   const topics = useMessagePipeline((state: MessagePipelineState) => state.sortedTopics);
   const activeTab = useSidebarStore((s) => s.tab);
   const setActiveTab = useSidebarStore((s) => s.setTab);
+  const initialSidebarTabAppliedRef = useRef(false);
   const qualityFilter = useSidebarStore((s) => s.qualityFilter);
   const setQualityFilter = useSidebarStore((s) => s.setQualityFilter);
   const [searchQuery, setSearchQuery] = useState('');
@@ -88,6 +92,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
     setSelectedTopicName(topics[0]?.name ?? null);
   }, [topics, selectedTopicName]);
+
+  useLayoutEffect(() => {
+    if (!initialSidebarTab || initialSidebarTabAppliedRef.current) {
+      return;
+    }
+    const isValid =
+      initialSidebarTab === 'topics' ||
+      (showDatasetsTab && initialSidebarTab === 'datasets') ||
+      initialSidebarTab === 'quality' ||
+      initialSidebarTab === 'settings' ||
+      extensionTabs.some((tab) => tab.id === initialSidebarTab);
+    if (isValid) {
+      setActiveTab(initialSidebarTab);
+      initialSidebarTabAppliedRef.current = true;
+    }
+  }, [extensionTabs, initialSidebarTab, setActiveTab, showDatasetsTab]);
 
   useEffect(() => {
     const tabId: string = activeTab;

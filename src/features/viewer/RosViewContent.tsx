@@ -90,6 +90,8 @@ interface RosViewContentProps {
   layoutStorageKey?: string;
   suppressWelcomePanel?: boolean;
   onLayoutReady?: (info: { panelCount: number }) => void;
+  /** Sidebar tab id to select on first mount (e.g. extension `sidebarTabs[].id`). */
+  initialSidebarTab?: string;
 }
 
 export const RosViewContent: React.FC<RosViewContentProps> = ({
@@ -127,6 +129,7 @@ export const RosViewContent: React.FC<RosViewContentProps> = ({
   layoutStorageKey,
   suppressWelcomePanel,
   onLayoutReady,
+  initialSidebarTab,
 }) => {
   const { formatMessage } = useIntl();
   const presence = useMessagePipeline((state: MessagePipelineState) => state.playerState.presence);
@@ -337,6 +340,7 @@ export const RosViewContent: React.FC<RosViewContentProps> = ({
                     preferencePersistence={preferencePersistence}
                     extensionContext={extensionContext}
                     extensions={extensions}
+                    initialSidebarTab={initialSidebarTab}
                   />
                 </ResizablePanel>
                 <ResizableHandle withHandle aria-label={formatMessage({ id: 'viewer.resizeSidebar' })} />

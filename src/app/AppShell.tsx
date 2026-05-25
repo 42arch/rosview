@@ -59,6 +59,8 @@ interface AppShellProps {
   layoutStorageKey?: string;
   suppressWelcomePanel?: boolean;
   onLayoutReady?: (info: { panelCount: number }) => void;
+  /** Sidebar tab id to select on first mount (e.g. extension `sidebarTabs[].id`). */
+  initialSidebarTab?: string;
 }
 
 export const AppShell: React.FC<AppShellProps> = ({
@@ -104,6 +106,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   layoutStorageKey,
   suppressWelcomePanel,
   onLayoutReady,
+  initialSidebarTab,
 }) => {
   useKeyboardShortcuts(player);
   const [sampleDialogOpen, setSampleDialogOpen] = useState(false);
@@ -190,6 +193,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         layoutStorageKey={layoutStorageKey}
         suppressWelcomePanel={suppressWelcomePanel}
         onLayoutReady={onLayoutReady}
+        initialSidebarTab={initialSidebarTab}
       />
       {!hideOpenFileMenus && (
         <SampleDatasetDialog open={sampleDialogOpen} onOpenChange={setSampleDialogOpen} onSelect={onSelectSample} />
