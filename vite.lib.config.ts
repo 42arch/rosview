@@ -81,9 +81,12 @@ export default defineConfig({
     sourcemap: false,
     copyPublicDir: false,
     lib: {
-      entry: path.join(packageDir, 'src/entrypoints/index.ts'),
+      entry: {
+        rosview: path.join(packageDir, 'src/entrypoints/index.ts'),
+        'urdf-preview': path.join(packageDir, 'src/entrypoints/urdf-preview.ts'),
+      },
       formats: ['es'],
-      fileName: 'rosview.es',
+      fileName: (_format, entryName) => `${entryName}.es.js`,
     },
     rollupOptions: {
       onLog(level, log, defaultHandler) {

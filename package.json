@@ -1,6 +1,6 @@
 {
   "name": "@ioai/rosview",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "High-performance robotics data visualization for MCAP, ROS bag, ROS2 db3, HDF5 and BVH — embeddable React component and standalone SPA",
   "keywords": [
     "ros",
@@ -33,7 +33,11 @@
       "types": "./dist-lib/rosview.d.ts",
       "import": "./dist-lib/rosview.es.js"
     },
-    "./style.css": "./dist-lib/rosview.css"
+    "./style.css": "./dist-lib/rosview.css",
+    "./urdf-preview": {
+      "types": "./dist-lib/urdf-preview.d.ts",
+      "import": "./dist-lib/urdf-preview.es.js"
+    }
   },
   "files": [
     "dist-lib"
