@@ -1,4 +1,5 @@
-import { ROS2_TO_DEFINITIONS, Rosbag2, SqliteSqljs } from "@foxglove/rosbag2-web";
+import { ROS2_TO_DEFINITIONS, Rosbag2 } from '@foxglove/rosbag2';
+import { SqliteSqljsDb } from './SqliteSqljsDb';
 import { stringify } from "@foxglove/rosmsg";
 import type { Initialization, MessageEvent, RosDatatypes, Time, TopicInfo, TopicStats } from '@/core/types/ros';
 import type { GetAdjacentMessageArgs, IIterableSource } from "./IIterableSource";
@@ -38,6 +39,33 @@ function toMessageEvent(msg: Rosbag2ReadRow): MessageEvent {
   };
 }
 
+function mergeTopicTimeRange(
+  existing: [Time, Time] | undefined,
+  next: [Time, Time],
+): [Time, Time] {
+  if (!existing) return next;
+  const [minA, maxA] = existing;
+  const [minB, maxB] = next;
+  return [
+    toNano(minB) < toNano(minA) ? minB : minA,
+    toNano(maxB) > toNano(maxA) ? maxB : maxA,
+  ];
+}
+
+function computeTopicMetrics(
+  messageCount: number,
+  start?: Time,
+  end?: Time,
+): { durationSec?: number; frequency: number } {
+  const durationSec =
+    start && end && toNano(end) > toNano(start)
+      ? Number(toNano(end) - toNano(start)) / 1e9
+      : undefined;
+  const frequency =
+    durationSec != null && durationSec > 0 && messageCount > 1 ? (messageCount - 1) / durationSec : 0;
+  return { durationSec, frequency: frequency > 0 ? frequency : 0 };
+}
+
 export class RosDb3IterableSource implements IIterableSource {
   private _params: RosDb3SourceParams;
   private _sqlWasmBinary?: ArrayBuffer;
@@ -51,11 +79,11 @@ export class RosDb3IterableSource implements IIterableSource {
   }
 
   async initialize(): Promise<Initialization> {
-    await SqliteSqljs.Initialize({
+    await SqliteSqljsDb.initialize({
       ...(this._sqlWasmBinary ? { wasmBinary: this._sqlWasmBinary } : {}),
     });
 
-    const dbs = this._params.files.map((file) => new SqliteSqljs(file));
+    const dbs = this._params.files.map((file) => new SqliteSqljsDb(file));
     const bag = new Rosbag2(dbs, { timeType: "sec,nsec" });
     await bag.open();
     this._bag = bag;
@@ -63,6 +91,14 @@ export class RosDb3IterableSource implements IIterableSource {
     const [start, end] = await this._bag.timeRange();
     const topicDefs = await this._bag.readTopics();
     const messageCounts = await this._bag.messageCounts();
+
+    const timeRangeByTopic = new Map<string, [Time, Time]>();
+    for (const db of dbs) {
+      const ranges = await db.topicTimeRanges();
+      for (const [topicName, range] of ranges) {
+        timeRangeByTopic.set(topicName, mergeTopicTimeRange(timeRangeByTopic.get(topicName), range));
+      }
+    }
 
     const topics: TopicInfo[] = [];
     const topicStats: Record<string, TopicStats> = {};
@@ -78,14 +114,22 @@ export class RosDb3IterableSource implements IIterableSource {
 
     for (const topicDef of topicDefs) {
       const numMessages = messageCounts.get(topicDef.name) ?? 0;
+      const [topicStart, topicEnd] = timeRangeByTopic.get(topicDef.name) ?? [];
+      const { durationSec, frequency } = computeTopicMetrics(numMessages, topicStart, topicEnd);
 
       const topic: TopicInfo = {
         name: topicDef.name,
         type: topicDef.type,
         messageCount: numMessages,
+        durationSec,
+        frequency: frequency > 0 ? frequency : undefined,
       };
       topics.push(topic);
-      topicStats[topicDef.name] = { messageCount: numMessages, frequency: 0 };
+      topicStats[topicDef.name] = {
+        messageCount: numMessages,
+        durationSec,
+        frequency,
+      };
 
       const parsedMsgdef = ROS2_TO_DEFINITIONS.get(topicDef.type);
       if (parsedMsgdef) {

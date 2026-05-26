@@ -155,6 +155,8 @@ export class IterablePlayer implements Player {
   private _isBuffering = false;
   private _topicLastMessageNs = new Map<string, bigint>();
   private _highFrequencyConsumerSignature = "";
+  private _playbackEpoch = 0;
+  private _fetchEpoch: number | undefined;
   private _debugEnabled =
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugPlayback") === "1";
 
@@ -296,10 +298,16 @@ export class IterablePlayer implements Player {
     if (!topicsChanged) {
       return;
     }
-    if (this._cursor) {
-      await this._cursor.end();
-      this._cursor = undefined;
+    const epoch = this._advancePlaybackEpoch();
+    const cursor = this._cursor;
+    this._cursor = undefined;
+    if (cursor) {
+      await cursor.end();
+      if (!this._isPlaybackEpochCurrent(epoch)) {
+        return;
+      }
     }
+    this._scheduleNextTick();
   }
 
   private async _handleHighFrequencyConsumerChange(
@@ -309,8 +317,14 @@ export class IterablePlayer implements Player {
     const before = new Set(previousTopics);
     await this._handleTopicSetChange(before);
     if (this._cursor && previousSignature !== this._highFrequencyConsumerSignature) {
-      await this._cursor.end();
+      const epoch = this._advancePlaybackEpoch();
+      const cursor = this._cursor;
       this._cursor = undefined;
+      await cursor.end();
+      if (!this._isPlaybackEpochCurrent(epoch)) {
+        return;
+      }
+      this._scheduleNextTick();
     }
     if (!this._isPlaying && this._initialization) {
       await this._backfillCurrentTime();
@@ -318,14 +332,19 @@ export class IterablePlayer implements Player {
   }
 
   private async _backfillCurrentTime(): Promise<void> {
+    const epoch = this._playbackEpoch;
+    const referenceTime = this._currentTime;
     const topics = this._currentTopics();
     if (topics.length === 0) return;
     try {
       const messages = await this._source.getBackfillMessages({
-        time: this._currentTime,
+        time: referenceTime,
         topics,
       });
-      this._distributeMessages(messages, this._currentTime);
+      if (!this._isPlaybackEpochCurrent(epoch)) {
+        return;
+      }
+      this._distributeMessages(messages, referenceTime);
       this._lastPipelineEmitMs = 0;
       this._emitState();
     } catch (err) {
@@ -339,6 +358,7 @@ export class IterablePlayer implements Player {
     this._emitState();
 
     try {
+      this._advancePlaybackEpoch();
       this._initialization = await this._source.initialize(args);
       this._topicLastMessageNs.clear();
       this._currentTime = this._initialization.start;
@@ -417,6 +437,7 @@ export class IterablePlayer implements Player {
 
   play(): void {
     if (this._isPlaying) return;
+    this._advancePlaybackEpoch();
     this._isPlaying = true;
     const now = performance.now();
     this._clock.play(this._currentTime, this._speedFactor(), now);
@@ -430,13 +451,11 @@ export class IterablePlayer implements Player {
       void this._refreshLoadProgress();
     }
     this._emitState();
-    this._cancelRaf();
-    if (!this._pageSuspended) {
-      this._rafId = requestAnimationFrame(this._tickLoop);
-    }
+    this._scheduleNextTick();
   }
 
   pause(): void {
+    this._advancePlaybackEpoch();
     const now = performance.now();
     this._clock.pause(now);
     this._currentTime = this._clock.getTime(now);
@@ -463,23 +482,50 @@ export class IterablePlayer implements Player {
   }
 
   private async _seekAsync(time: Time): Promise<void> {
-    this._currentTime = this._clampToRange(time);
-    this._clock.seek(this._currentTime, performance.now());
+    const epoch = this._advancePlaybackEpoch();
+    const seekTime = this._clampToRange(time);
+    const now = performance.now();
+    this._cancelRaf();
+    this._currentTime = seekTime;
+    this._clock.seek(seekTime, now);
+    this._lastTickWallMs = now;
     this._topicLastMessageNs.clear();
-    if (this._cursor) {
-      await this._cursor.end();
-      this._cursor = undefined;
-    }
-
-    const topics = this._currentTopics();
-    if (topics.length > 0) {
-      const messages = await this._source.getBackfillMessages({ time, topics });
-      this._distributeMessages(messages, this._currentTime);
-    }
-
-    this._notifyTimeSubscribers(this._currentTime);
+    this._notifyTimeSubscribers(seekTime);
     this._lastPipelineEmitMs = 0;
     this._emitState();
+
+    try {
+      const cursor = this._cursor;
+      this._cursor = undefined;
+      if (cursor) {
+        await cursor.end();
+        if (!this._isPlaybackEpochCurrent(epoch)) {
+          return;
+        }
+      }
+
+      if (!this._isPlaybackEpochCurrent(epoch)) {
+        return;
+      }
+      const topics = this._currentTopics();
+      if (topics.length > 0) {
+        const messages = await this._source.getBackfillMessages({ time: seekTime, topics });
+        if (!this._isPlaybackEpochCurrent(epoch)) {
+          return;
+        }
+        this._distributeMessages(messages, seekTime);
+      }
+    } catch (err) {
+      if (this._isPlaybackEpochCurrent(epoch)) {
+        console.warn("IterablePlayer: seek failed", err);
+      }
+    } finally {
+      if (this._isPlaybackEpochCurrent(epoch)) {
+        this._lastPipelineEmitMs = 0;
+        this._emitState();
+        this._scheduleNextTick();
+      }
+    }
   }
 
   stepBy(deltaMs: number): void {
@@ -492,18 +538,27 @@ export class IterablePlayer implements Player {
   }
 
   private async _stepMessageAsync(direction: -1 | 1): Promise<void> {
+    const epoch = this._advancePlaybackEpoch();
+    const referenceTime = this._currentTime;
     const topics = this._currentTopics();
-    if (topics.length === 0) return;
+    this._cancelRaf();
+    if (topics.length === 0) {
+      this._scheduleNextTick();
+      return;
+    }
     try {
       const msg = await this._source.getAdjacentMessage({
-        time: this._currentTime,
+        time: referenceTime,
         topics,
         direction: direction === 1 ? "next" : "prev",
       });
+      if (!this._isPlaybackEpochCurrent(epoch)) return;
       if (!msg) return;
-      if (this._cursor) {
-        await this._cursor.end();
-        this._cursor = undefined;
+      const cursor = this._cursor;
+      this._cursor = undefined;
+      if (cursor) {
+        await cursor.end();
+        if (!this._isPlaybackEpochCurrent(epoch)) return;
       }
       this._currentTime = this._clampToRange(msg.receiveTime);
       this._clock.seek(this._currentTime, performance.now());
@@ -512,8 +567,13 @@ export class IterablePlayer implements Player {
       this._notifyTimeSubscribers(this._currentTime);
       this._lastPipelineEmitMs = 0;
       this._emitState();
+      this._scheduleNextTick();
     } catch (err) {
       console.warn("IterablePlayer: stepMessage failed", err);
+    } finally {
+      if (this._isPlaybackEpochCurrent(epoch)) {
+        this._scheduleNextTick();
+      }
     }
   }
 
@@ -551,6 +611,7 @@ export class IterablePlayer implements Player {
   }
 
   close(): void {
+    this._advancePlaybackEpoch();
     this._clock.pause(performance.now());
     this._isPlaying = false;
     this._pageSuspended = false;
@@ -564,6 +625,7 @@ export class IterablePlayer implements Player {
     this._initialization = undefined;
     this._clock = new PlaybackClock();
     this._cursor = undefined;
+    this._fetchEpoch = undefined;
     this._topicLastMessageNs.clear();
     this._highFrequencyConsumersById.clear();
     this._highFrequencyConsumersByTopic.clear();
@@ -574,6 +636,22 @@ export class IterablePlayer implements Player {
     if (this._rafId != undefined) {
       cancelAnimationFrame(this._rafId);
       this._rafId = undefined;
+    }
+  }
+
+  private _advancePlaybackEpoch(): number {
+    this._playbackEpoch += 1;
+    return this._playbackEpoch;
+  }
+
+  private _isPlaybackEpochCurrent(epoch: number): boolean {
+    return epoch === this._playbackEpoch && this._state.presence !== "closed";
+  }
+
+  private _scheduleNextTick(): void {
+    this._cancelRaf();
+    if (this._isPlaying && !this._pageSuspended) {
+      this._rafId = requestAnimationFrame(this._tickLoop);
     }
   }
 
@@ -809,8 +887,7 @@ export class IterablePlayer implements Player {
     this._clock.resume(now);
     this._lastTickWallMs = now;
     this._pageSuspended = false;
-    this._cancelRaf();
-    this._rafId = requestAnimationFrame(this._tickLoop);
+    this._scheduleNextTick();
   }
 
   private async _tickAsync(): Promise<void> {
@@ -818,28 +895,23 @@ export class IterablePlayer implements Player {
     const now = performance.now();
     if (this._isFetching) {
       this._clock.seek(this._currentTime, now);
-      if (this._isPlaying) {
-        this._rafId = requestAnimationFrame(this._tickLoop);
-      }
+      this._scheduleNextTick();
       return;
     }
 
     const tickDurationMs = 1000 / this._samplingFps;
     if (now - this._lastTickWallMs < tickDurationMs) {
-      if (this._isPlaying) {
-        this._rafId = requestAnimationFrame(this._tickLoop);
-      }
+      this._scheduleNextTick();
       return;
     }
 
+    const epoch = this._playbackEpoch;
     this._lastTickWallMs = now;
     const nextTime = this._clampToRange(this._clock.getTime(now));
     const currentNs = toNano(this._currentTime);
     const nextNs = toNano(nextTime);
     if (nextNs <= currentNs) {
-      if (this._isPlaying) {
-        this._rafId = requestAnimationFrame(this._tickLoop);
-      }
+      this._scheduleNextTick();
       return;
     }
     const batchDurationMs = Math.max(1, Number(nextNs - currentNs) / 1e6);
@@ -847,18 +919,29 @@ export class IterablePlayer implements Player {
     if (!this._cursor) {
       const topics = this._currentTopics();
       if (topics.length > 0) {
-        this._cursor = await this._source.getMessageCursor({
-          startTime: this._currentTime,
+        const cursorStartTime = this._currentTime;
+        const cursor = await this._source.getMessageCursor({
+          startTime: cursorStartTime,
           topics,
           latestOnlyTopics: this._latestOnlyHighFrequencyTopics(),
         });
+        if (!this._isPlaybackEpochCurrent(epoch) || toNano(this._currentTime) !== toNano(cursorStartTime)) {
+          await cursor.end();
+          return;
+        }
+        this._cursor = cursor;
       }
     }
 
     if (this._cursor) {
       this._isFetching = true;
+      this._fetchEpoch = epoch;
       try {
-        const messages = await this._cursor.nextBatch(batchDurationMs, { endTime: nextTime });
+        const cursor = this._cursor;
+        const messages = await cursor.nextBatch(batchDurationMs, { endTime: nextTime });
+        if (!this._isPlaybackEpochCurrent(epoch) || cursor !== this._cursor) {
+          return;
+        }
         if (messages.length > 0) {
           this._emptyBatchStreak = 0;
           this._distributeMessages(messages);
@@ -870,37 +953,54 @@ export class IterablePlayer implements Player {
             }));
           }
         } else {
-          await this._handleEmptyBatch(now);
+          await this._handleEmptyBatch(now, epoch);
+          if (!this._isPlaybackEpochCurrent(epoch)) {
+            return;
+          }
         }
       } catch (err) {
         console.error("Failed to fetch messages", err);
       } finally {
-        this._isFetching = false;
+        if (this._fetchEpoch === epoch) {
+          this._isFetching = false;
+          this._fetchEpoch = undefined;
+        }
       }
     }
 
+    if (!this._isPlaybackEpochCurrent(epoch)) {
+      return;
+    }
     this._currentTime = nextTime;
     this._clock.seek(this._currentTime, performance.now());
-    await this._refreshStaleTopicsFromBackfill(now);
+    await this._refreshStaleTopicsFromBackfill(now, epoch);
+    if (!this._isPlaybackEpochCurrent(epoch)) {
+      return;
+    }
 
     if (this._initialization && toNano(this._currentTime) >= toNano(this._initialization.end)) {
       if (this._isLooping) {
         this._currentTime = this._initialization.start;
         this._clock.seek(this._currentTime, performance.now());
-        if (this._cursor) {
-          await this._cursor.end();
-          this._cursor = undefined;
+        const cursor = this._cursor;
+        this._cursor = undefined;
+        if (cursor) {
+          await cursor.end();
+          if (!this._isPlaybackEpochCurrent(epoch)) {
+            return;
+          }
         }
         const topics = this._currentTopics();
         if (topics.length > 0) {
           const messages = await this._source.getBackfillMessages({ time: this._currentTime, topics });
+          if (!this._isPlaybackEpochCurrent(epoch)) {
+            return;
+          }
           this._distributeMessages(messages, this._currentTime);
         }
         this._notifyTimeSubscribers(this._currentTime);
         this._emitState();
-        if (this._isPlaying) {
-          this._rafId = requestAnimationFrame(this._tickLoop);
-        }
+        this._scheduleNextTick();
         return;
       }
       this._currentTime = this._initialization.end;
@@ -913,9 +1013,7 @@ export class IterablePlayer implements Player {
     this._notifyTimeSubscribers(this._currentTime);
     this._maybeEmitPipelineState();
 
-    if (this._isPlaying) {
-      this._rafId = requestAnimationFrame(this._tickLoop);
-    }
+    this._scheduleNextTick();
   }
 
   private _clampToRange(time: Time): Time {
@@ -1019,7 +1117,7 @@ export class IterablePlayer implements Player {
     }
   }
 
-  private async _handleEmptyBatch(nowMs: number): Promise<void> {
+  private async _handleEmptyBatch(nowMs: number, epoch: number): Promise<void> {
     this._emptyBatchStreak += 1;
     this._state.progress = {
       ...this._state.progress,
@@ -1029,7 +1127,10 @@ export class IterablePlayer implements Player {
     };
 
     if (this._emptyBatchStreak === 1) {
-      await this._rebuildCursorFromCurrentTime();
+      await this._rebuildCursorFromCurrentTime(epoch);
+      if (!this._isPlaybackEpochCurrent(epoch)) {
+        return;
+      }
       if (this._debugEnabled) {
         console.debug("[Playback] empty batch -> rebuild cursor " + JSON.stringify({
           streak: this._emptyBatchStreak,
@@ -1046,15 +1147,19 @@ export class IterablePlayer implements Player {
     }
     this._lastFallbackBackfillMs = nowMs;
     this._fallbackBackfillCount += 1;
+    const referenceTime = this._currentTime;
     const topics = this._currentTopics();
     if (topics.length === 0) {
       return;
     }
     try {
       const messages = await this._source.getBackfillMessages({
-        time: this._currentTime,
+        time: referenceTime,
         topics,
       });
+      if (!this._isPlaybackEpochCurrent(epoch)) {
+        return;
+      }
       // For latched topics (URDF, static TF), the backfill returns the same
       // message we already distributed – skip those so downstream panels don't
       // needlessly rebuild (URDF rebuild fetches + parses meshes, which was
@@ -1063,7 +1168,7 @@ export class IterablePlayer implements Player {
       if (freshMessages.length === 0) {
         return;
       }
-      this._distributeMessages(freshMessages, this._currentTime);
+      this._distributeMessages(freshMessages, referenceTime);
       if (this._debugEnabled) {
         console.debug("[Playback] empty batch -> fallback backfill " + JSON.stringify({
           streak: this._emptyBatchStreak,
@@ -1077,22 +1182,32 @@ export class IterablePlayer implements Player {
     }
   }
 
-  private async _rebuildCursorFromCurrentTime(): Promise<void> {
-    if (this._cursor) {
-      await this._cursor.end();
-      this._cursor = undefined;
+  private async _rebuildCursorFromCurrentTime(epoch: number): Promise<void> {
+    const previousCursor = this._cursor;
+    this._cursor = undefined;
+    if (previousCursor) {
+      await previousCursor.end();
+      if (!this._isPlaybackEpochCurrent(epoch)) {
+        return;
+      }
     }
     const topics = this._currentTopics();
     if (topics.length === 0) return;
     this._cursorRebuildCount += 1;
-    this._cursor = await this._source.getMessageCursor({
-      startTime: this._currentTime,
+    const cursorStartTime = this._currentTime;
+    const cursor = await this._source.getMessageCursor({
+      startTime: cursorStartTime,
       topics,
       latestOnlyTopics: this._latestOnlyHighFrequencyTopics(),
     });
+    if (!this._isPlaybackEpochCurrent(epoch) || toNano(this._currentTime) !== toNano(cursorStartTime)) {
+      await cursor.end();
+      return;
+    }
+    this._cursor = cursor;
   }
 
-  private async _refreshStaleTopicsFromBackfill(nowMs: number): Promise<void> {
+  private async _refreshStaleTopicsFromBackfill(nowMs: number, epoch: number): Promise<void> {
     if (nowMs - this._lastStaleRefreshMs < STALE_TOPIC_REFRESH_COOLDOWN_MS) {
       return;
     }
@@ -1110,11 +1225,15 @@ export class IterablePlayer implements Player {
       return;
     }
     this._lastStaleRefreshMs = nowMs;
+    const referenceTime = this._currentTime;
     try {
       const messages = await this._source.getBackfillMessages({
-        time: this._currentTime,
+        time: referenceTime,
         topics: staleTopics,
       });
+      if (!this._isPlaybackEpochCurrent(epoch)) {
+        return;
+      }
       // Same reasoning as in _handleEmptyBatch: latched topics would otherwise
       // get re-delivered on every refresh tick (~5 Hz), causing panels like
       // the 3D/URDF renderer to rebuild from scratch and leak GPU buffers.
@@ -1122,7 +1241,7 @@ export class IterablePlayer implements Player {
       if (freshMessages.length === 0) {
         return;
       }
-      this._distributeMessages(freshMessages, this._currentTime);
+      this._distributeMessages(freshMessages, referenceTime);
       if (this._debugEnabled) {
         console.debug("[Playback] stale refresh " + JSON.stringify({
           staleTopicCount: staleTopics.length,

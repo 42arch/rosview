@@ -23,36 +23,14 @@ import type { RosViewExtension } from '@/core/extensions/types';
 import { buildExtensionContext } from '@/core/extensions/buildContext';
 import type { FoxgloveLayoutData } from '@/core/preferences/foxgloveLayout';
 import type { OpenPanelInput } from '@/features/layout/dockviewController';
-
-const DEFAULT_SIDEBAR_WIDTH = 288;
-const MIN_SIDEBAR_WIDTH = 240;
-const MAX_SIDEBAR_WIDTH = 520;
-const DEFAULT_LAYOUT_WIDTH = 1280;
-const DEFAULT_SIDEBAR_PANEL_PERCENT = (DEFAULT_SIDEBAR_WIDTH / DEFAULT_LAYOUT_WIDTH) * 100;
-const MIN_SIDEBAR_PANEL_PERCENT = (MIN_SIDEBAR_WIDTH / DEFAULT_LAYOUT_WIDTH) * 100;
-const MAX_SIDEBAR_PANEL_PERCENT = (MAX_SIDEBAR_WIDTH / DEFAULT_LAYOUT_WIDTH) * 100;
-
-function clampSidebarPanelPercent(value: number): number {
-  return Math.min(MAX_SIDEBAR_PANEL_PERCENT, Math.max(MIN_SIDEBAR_PANEL_PERCENT, value));
-}
-
-function getInitialSidebarPanelPercent(persistence: PreferencePersistence): number {
-  if (persistence !== 'localStorage') {
-    return DEFAULT_SIDEBAR_PANEL_PERCENT;
-  }
-  const preferences = readPreferences();
-  if (preferences?.sidebarPanelPercent !== undefined) {
-    return clampSidebarPanelPercent(preferences.sidebarPanelPercent);
-  }
-  if (preferences?.sidebarWidth !== undefined) {
-    const viewportWidth =
-      typeof globalThis === 'undefined' || !('innerWidth' in globalThis) || !globalThis.innerWidth
-        ? DEFAULT_LAYOUT_WIDTH
-        : globalThis.innerWidth;
-    return clampSidebarPanelPercent((preferences.sidebarWidth / viewportWidth) * 100);
-  }
-  return DEFAULT_SIDEBAR_PANEL_PERCENT;
-}
+import {
+  SIDEBAR_MAX_PANEL_PERCENT,
+  SIDEBAR_MIN_PANEL_PERCENT,
+} from '@/features/layout/layoutConstants';
+import {
+  clampSidebarPanelPercent,
+  getInitialSidebarPanelPercent,
+} from '@/features/layout/sidebarPanelSize';
 
 interface RosViewContentProps {
   player: Player;
@@ -327,8 +305,8 @@ export const RosViewContent: React.FC<RosViewContentProps> = ({
                   id="sidebar"
                   className="flex h-full min-h-0 min-w-0 flex-col"
                   defaultSize={`${sidebarPanelPercent}%`}
-                  minSize={`${MIN_SIDEBAR_PANEL_PERCENT}%`}
-                  maxSize={`${MAX_SIDEBAR_PANEL_PERCENT}%`}
+                  minSize={`${SIDEBAR_MIN_PANEL_PERCENT}%`}
+                  maxSize={`${SIDEBAR_MAX_PANEL_PERCENT}%`}
                 >
                   <Sidebar
                     player={player}
@@ -350,7 +328,7 @@ export const RosViewContent: React.FC<RosViewContentProps> = ({
               id="main"
               className="flex h-full min-h-0 min-w-0 flex-col"
               defaultSize={showSidebar ? `${100 - sidebarPanelPercent}%` : '100%'}
-              minSize={showSidebar ? `${100 - MAX_SIDEBAR_PANEL_PERCENT}%` : '100%'}
+              minSize={showSidebar ? `${100 - SIDEBAR_MAX_PANEL_PERCENT}%` : '100%'}
             >
               <main
                 className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background [contain:strict] ${

@@ -4,14 +4,16 @@ import { useIntl } from 'react-intl';
 import { toast } from 'sonner';
 import { messageBus } from '@/core/pipeline/messageBus';
 import { useMessagePipeline } from '@/core/pipeline/useMessagePipeline';
-import { useTopicSeq } from '@/core/pipeline/useMessageBus';
-import type { MessageEvent } from '@/core/types/ros';
+import type { MessageEvent, Time } from '@/core/types/ros';
 import type { MessagePipelineState } from '@/core/pipeline/store';
 import type { Player } from '@/core/types/player';
 import { pickDefaultRawMessagesTopic } from '@/features/layout/autoLayout/pickDefaultRawMessagesTopic';
+import { isRosImageSchema } from '@/shared/ros/rosMessageTypes';
+import { formatLocalTimestamp } from '@/shared/utils/time';
+import { scheduleFrame } from '@/shared/utils/rafScheduler';
 import { TopicQuickPicker } from '../framework/TopicQuickPicker';
 import type { RawMessagesConfig } from './defaults';
-import { buildRowsForShape, type FlatRow } from './shapeTree';
+import { buildRowsForMessageEvent, type FlatRow } from './shapeTree';
 
 interface RawMessagesPanelProps {
   player: Player;
@@ -35,12 +37,22 @@ interface ValueVisual {
   kind: ValueKind;
 }
 
-interface StreamStats {
-  incomingUpdates: number;
-  displayedUpdates: number;
-  droppedUpdates: number;
-  shapeMisses: number;
-  framePatchMs: number;
+interface ScrollWindow {
+  startRow: number;
+  endRow: number;
+  totalRows: number;
+}
+
+interface DescribeValueOptions {
+  hideBinaryHex?: boolean;
+}
+
+interface RawMessageRowProps {
+  row: FlatRow;
+  expanded: boolean;
+  onToggle: (path: string) => void;
+  onCopy: (path: string) => void;
+  registerValueNode: (path: string, node: HTMLSpanElement | null) => void;
 }
 
 const ROW_HEIGHT = 22;
@@ -48,6 +60,8 @@ const OVERSCAN_ROWS = 8;
 const MAX_VISIBLE_PATCH_ROWS = 1200;
 const MAX_OBJECT_PREVIEW_FIELDS = 3;
 const MAX_PREVIEW_STRING_LENGTH = 80;
+const LARGE_BINARY_THRESHOLD = 1024;
+const COMPACT_BINARY_PREVIEW_BYTES = 32;
 
 function toHex(data: Uint8Array): string {
   let out = '';
@@ -76,10 +90,24 @@ function pathToParts(path: string): string[] {
   return path.split('.').filter((part) => part.length > 0);
 }
 
-function readValueAtPath(root: unknown, path: string): unknown {
-  if (!path || path === 'message') return root;
+function isRosTime(value: unknown): value is Time {
+  if (!isPlainObject(value)) return false;
+  return typeof value.sec === 'number' && typeof value.nsec === 'number';
+}
+
+function formatRosTime(time: Time): string {
+  const nsecPadded = time.nsec.toString().padStart(9, '0');
+  return `${time.sec}.${nsecPadded} (${formatLocalTimestamp(time)})`;
+}
+
+function readValueAtPath(event: MessageEvent | null | undefined, path: string): unknown {
+  if (!event) return undefined;
+  if (path === 'log_time') return event.receiveTime;
+  if (path === 'publish_time') return event.publishTime;
+  if (!path || path === 'message') return event.message;
+  if (!path.startsWith('message.')) return undefined;
   const parts = pathToParts(path.replace(/^message\./, ''));
-  let current: unknown = root;
+  let current: unknown = event.message;
   for (const part of parts) {
     if (Array.isArray(current)) {
       const idx = Number(part);
@@ -107,6 +135,17 @@ function getVisibleRows(rows: FlatRow[], expandedPaths: Set<string>): FlatRow[] 
     }
   }
   return out;
+}
+
+function computeScrollWindow(
+  scrollTop: number,
+  viewportHeight: number,
+  totalRows: number,
+): Pick<ScrollWindow, 'startRow' | 'endRow'> {
+  const startRow = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
+  const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN_ROWS * 2;
+  const endRow = Math.min(totalRows, startRow + visibleCount);
+  return { startRow, endRow };
 }
 
 function previewPrimitive(value: unknown): string {
@@ -144,16 +183,27 @@ function previewObject(value: Record<string, unknown>): string | null {
   return `{${fields.join(',')}${keys.length > MAX_OBJECT_PREVIEW_FIELDS ? ',...' : ''}}`;
 }
 
-function describeValue(value: unknown, maxBinaryPreviewBytes: number): ValueVisual {
+export function describeValue(
+  value: unknown,
+  maxBinaryPreviewBytes: number,
+  options?: DescribeValueOptions,
+): ValueVisual {
+  if (isRosTime(value)) {
+    return { text: formatRosTime(value), kind: 'number' };
+  }
   if (value instanceof Uint8Array) {
-    const head = value.subarray(0, Math.min(value.byteLength, maxBinaryPreviewBytes));
+    const previewLength =
+      options?.hideBinaryHex || value.byteLength > LARGE_BINARY_THRESHOLD
+        ? COMPACT_BINARY_PREVIEW_BYTES
+        : Math.min(value.byteLength, maxBinaryPreviewBytes);
+    const head = value.subarray(0, previewLength);
     return {
       text: `Uint8Array(${value.byteLength}) 0x${toHex(head)}${value.byteLength > head.byteLength ? '...' : ''}`,
       kind: 'binary',
     };
   }
   if (value instanceof ArrayBuffer) {
-    return describeValue(new Uint8Array(value), maxBinaryPreviewBytes);
+    return describeValue(new Uint8Array(value), maxBinaryPreviewBytes, options);
   }
   if (Array.isArray(value)) return { text: `Array(${value.length})`, kind: 'array' };
   if (isPlainObject(value)) {
@@ -224,61 +274,62 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-function useScheduledTopicMessage(
-  topic: string,
-  topicSeq: number,
-  uiRefreshHz: number,
-  paused: boolean,
-  latestOnly: boolean,
-) {
-  const [displayed, setDisplayed] = useState<MessageEvent | null>(() => messageBus.getLastMessage(topic));
-  const [stats, setStats] = useState<StreamStats>({
-    incomingUpdates: 0,
-    displayedUpdates: 0,
-    droppedUpdates: 0,
-    shapeMisses: 0,
-    framePatchMs: 0,
-  });
-  const latestRef = useRef<MessageEvent | null>(messageBus.getLastMessage(topic));
-  const pendingRef = useRef(0);
-  const lastDisplayedAtRef = useRef(0);
-
-  useEffect(() => {
-    latestRef.current = messageBus.getLastMessage(topic);
-    pendingRef.current = latestOnly ? 1 : pendingRef.current + 1;
-    setStats((prev) => ({ ...prev, incomingUpdates: prev.incomingUpdates + 1 }));
-  }, [latestOnly, topic, topicSeq]);
-
-  useEffect(() => {
-    pendingRef.current = 0;
-    setDisplayed(messageBus.getLastMessage(topic));
-    lastDisplayedAtRef.current = performance.now();
-  }, [topic]);
-
-  useEffect(() => {
-    let rafId = 0;
-    const minInterval = 1000 / Math.max(1, uiRefreshHz);
-    const tick = () => {
-      const now = performance.now();
-      if (!paused && pendingRef.current > 0 && now - lastDisplayedAtRef.current >= minInterval) {
-        const dropped = Math.max(0, pendingRef.current - 1);
-        pendingRef.current = 0;
-        setDisplayed(latestRef.current);
-        setStats((prev) => ({
-          ...prev,
-          displayedUpdates: prev.displayedUpdates + 1,
-          droppedUpdates: prev.droppedUpdates + dropped,
-        }));
-        lastDisplayedAtRef.current = now;
-      }
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, [paused, uiRefreshHz]);
-
-  return { displayed, stats, setStats };
+function applyValueVisual(node: HTMLSpanElement, visual: ValueVisual): void {
+  node.textContent = visual.text;
+  if (node.dataset.kind !== visual.kind) {
+    node.dataset.kind = visual.kind;
+    node.style.color = valueColor(visual.kind);
+  }
 }
+
+const RawMessageRow = React.memo(function RawMessageRow({
+  row,
+  expanded,
+  onToggle,
+  onCopy,
+  registerValueNode,
+}: RawMessageRowProps) {
+  const handleToggle = useCallback(() => {
+    if (row.expandable) onToggle(row.path);
+  }, [onToggle, row.expandable, row.path]);
+
+  const handleCopy = useCallback(() => {
+    void onCopy(row.path);
+  }, [onCopy, row.path]);
+
+  const valueRef = useCallback(
+    (node: HTMLSpanElement | null) => {
+      registerValueNode(row.path, node);
+    },
+    [registerValueNode, row.path],
+  );
+
+  return (
+    <div
+      className="group flex h-[22px] items-center border-b border-border/30"
+      style={{ paddingLeft: row.depth * 14 }}
+    >
+      <button
+        type="button"
+        className={`mr-1 inline-flex h-4 w-4 items-center justify-center rounded ${row.expandable ? 'hover:bg-muted' : 'opacity-20'}`}
+        onClick={handleToggle}
+      >
+        {row.expandable ? (
+          <ChevronRight className={`size-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        ) : null}
+      </button>
+      <span className="mr-2 text-cyan-300">{row.key}:</span>
+      <span ref={valueRef} className="truncate" />
+      <button
+        type="button"
+        className="ml-2 rounded px-1 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
+        onClick={handleCopy}
+      >
+        COPY
+      </button>
+    </div>
+  );
+});
 
 export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
   player,
@@ -296,6 +347,75 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
   const { formatMessage } = useIntl();
   const topics = useMessagePipeline((state: MessagePipelineState) => state.sortedTopics);
   const didAutoPickTopicRef = useRef(false);
+  const isImageTopic = useMemo(() => {
+    const topicType = topics.find((entry) => entry.name === topic)?.type ?? '';
+    return isRosImageSchema(topicType);
+  }, [topic, topics]);
+
+  const latestRef = useRef<MessageEvent | null>(messageBus.getLastMessage(topic));
+  const pendingRef = useRef(0);
+  const lastDisplayedAtRef = useRef(0);
+  const pausedRef = useRef(pauseUpdates);
+  const uiRefreshHzRef = useRef(uiRefreshHz);
+  const latestOnlyRef = useRef(latestOnly);
+  const hasMessageRef = useRef(!!messageBus.getLastMessage(topic));
+  const shapeRowsRef = useRef<FlatRow[]>([]);
+  const shapeSignatureRef = useRef('');
+  const expandedPathsRef = useRef<Set<string>>(new Set(['message']));
+  const scrollTopRef = useRef(0);
+  const viewportHeightRef = useRef(240);
+  const scrollWindowRef = useRef<ScrollWindow>({ startRow: 0, endRow: 0, totalRows: 0 });
+  const configRef = useRef({
+    maxExpandedDepth,
+    maxRows,
+    maxBinaryPreviewBytes,
+    isImageTopic,
+  });
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const valueNodeRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
+  const latestValueVisualRef = useRef<Map<string, ValueVisual>>(new Map());
+  const pendingPatchRef = useRef<Map<string, ValueVisual>>(new Map());
+  const flushPendingRef = useRef<() => void>(() => {});
+  const didInitializeExpansionRef = useRef(false);
+
+  const [hasMessage, setHasMessage] = useState(() => !!messageBus.getLastMessage(topic));
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['message']));
+  const [shapeRows, setShapeRows] = useState<FlatRow[]>([]);
+  const [shapeSignature, setShapeSignature] = useState('');
+  const [scrollWindow, setScrollWindow] = useState<ScrollWindow>({ startRow: 0, endRow: 0, totalRows: 0 });
+
+  useEffect(() => {
+    pausedRef.current = pauseUpdates;
+  }, [pauseUpdates]);
+
+  useEffect(() => {
+    uiRefreshHzRef.current = uiRefreshHz;
+  }, [uiRefreshHz]);
+
+  useEffect(() => {
+    latestOnlyRef.current = latestOnly;
+  }, [latestOnly]);
+
+  useEffect(() => {
+    configRef.current = {
+      maxExpandedDepth,
+      maxRows,
+      maxBinaryPreviewBytes,
+      isImageTopic,
+    };
+  }, [isImageTopic, maxBinaryPreviewBytes, maxExpandedDepth, maxRows]);
+
+  useEffect(() => {
+    expandedPathsRef.current = expandedPaths;
+  }, [expandedPaths]);
+
+  useEffect(() => {
+    shapeRowsRef.current = shapeRows;
+  }, [shapeRows]);
+
+  useEffect(() => {
+    shapeSignatureRef.current = shapeSignature;
+  }, [shapeSignature]);
 
   useEffect(() => {
     if (didAutoPickTopicRef.current) return;
@@ -319,154 +439,247 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
     return () => player.unregisterSubscriptions(panelId);
   }, [player, panelId, topic]);
 
-  const topicSeq = useTopicSeq(topic);
-  const { displayed: displayMessage, setStats } = useScheduledTopicMessage(
-    topic,
-    topicSeq,
-    uiRefreshHz,
-    pauseUpdates,
-    latestOnly,
+  const applyDomPatch = useCallback(() => {
+    for (const [path, visual] of pendingPatchRef.current) {
+      const node = valueNodeRefs.current.get(path);
+      if (node) {
+        applyValueVisual(node, visual);
+      }
+    }
+    pendingPatchRef.current.clear();
+  }, []);
+
+  const patchVisibleValues = useCallback(
+    (message: MessageEvent) => {
+      const visible = getVisibleRows(shapeRowsRef.current, expandedPathsRef.current);
+      const { startRow, endRow } = scrollWindowRef.current;
+      const patchRows = visible.slice(startRow, endRow);
+      const maxPatchRows = Math.min(patchRows.length, MAX_VISIBLE_PATCH_ROWS);
+      const { maxBinaryPreviewBytes: previewBytes, isImageTopic: hideHex } = configRef.current;
+
+      for (let i = 0; i < maxPatchRows; i++) {
+        const row = patchRows[i];
+        if (!row) continue;
+        const value = readValueAtPath(message, row.path);
+        const visual = describeValue(value, previewBytes, { hideBinaryHex: hideHex });
+        latestValueVisualRef.current.set(row.path, visual);
+        const previousText = valueNodeRefs.current.get(row.path)?.textContent ?? null;
+        if (previousText !== visual.text) {
+          pendingPatchRef.current.set(row.path, visual);
+        }
+      }
+
+      if (pendingPatchRef.current.size > 0) {
+        scheduleFrame(applyDomPatch);
+      }
+    },
+    [applyDomPatch],
   );
 
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['message']));
-  const [shapeRows, setShapeRows] = useState<FlatRow[]>([]);
-  const [shapeSignature, setShapeSignature] = useState<string>('');
-  const [viewportHeight, setViewportHeight] = useState(240);
-  const [scrollTop, setScrollTop] = useState(0);
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const valueNodeRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
-  const latestValueVisualRef = useRef<Map<string, ValueVisual>>(new Map());
-  const pendingPatchRef = useRef<Map<string, ValueVisual>>(new Map());
-  const patchRafRef = useRef<number | null>(null);
-  const didInitializeExpansionRef = useRef(false);
+  const applyScrollWindow = useCallback(() => {
+    const visible = getVisibleRows(shapeRowsRef.current, expandedPathsRef.current);
+    const totalRows = visible.length;
+    const nextWindow = computeScrollWindow(scrollTopRef.current, viewportHeightRef.current, totalRows);
+    const next: ScrollWindow = { ...nextWindow, totalRows };
+
+    setScrollWindow((prev) => {
+      if (
+        prev.startRow === next.startRow &&
+        prev.endRow === next.endRow &&
+        prev.totalRows === next.totalRows
+      ) {
+        return prev;
+      }
+      scrollWindowRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const flushPending = useCallback(() => {
+    const now = performance.now();
+    const minInterval = 1000 / Math.max(1, uiRefreshHzRef.current);
+
+    if (pausedRef.current) {
+      return;
+    }
+
+    if (pendingRef.current <= 0) {
+      return;
+    }
+
+    if (now - lastDisplayedAtRef.current < minInterval) {
+      scheduleFrame(() => {
+        flushPendingRef.current();
+      });
+      return;
+    }
+
+    pendingRef.current = 0;
+    lastDisplayedAtRef.current = now;
+
+    const message = latestRef.current;
+    if (!message) {
+      return;
+    }
+
+    const { maxExpandedDepth: depth, maxRows: rowLimit } = configRef.current;
+    const nextShape = buildRowsForMessageEvent(message, depth, rowLimit);
+    if (nextShape.signature !== shapeSignatureRef.current) {
+      shapeSignatureRef.current = nextShape.signature;
+      shapeRowsRef.current = nextShape.rows;
+      setShapeRows(nextShape.rows);
+      setShapeSignature(nextShape.signature);
+
+      if (!didInitializeExpansionRef.current) {
+        const nextExpanded = new Set<string>(['message']);
+        for (const row of nextShape.rows) {
+          if (row.depth === 1 && row.expandable && row.path.startsWith('message.')) {
+            nextExpanded.add(row.path);
+          }
+        }
+        expandedPathsRef.current = nextExpanded;
+        setExpandedPaths(nextExpanded);
+        didInitializeExpansionRef.current = true;
+      }
+
+      applyScrollWindow();
+      scheduleFrame(() => {
+        if (latestRef.current) {
+          patchVisibleValues(latestRef.current);
+        }
+      });
+      return;
+    }
+
+    patchVisibleValues(message);
+  }, [applyScrollWindow, patchVisibleValues]);
+
+  useEffect(() => {
+    flushPendingRef.current = flushPending;
+  });
+
+  useEffect(() => {
+    if (!pauseUpdates && pendingRef.current > 0) {
+      scheduleFrame(flushPending);
+    }
+  }, [flushPending, pauseUpdates]);
+
+  useEffect(() => {
+    latestRef.current = messageBus.getLastMessage(topic);
+    pendingRef.current = 0;
+    lastDisplayedAtRef.current = performance.now();
+
+    const initial = latestRef.current;
+    if (initial) {
+      pendingRef.current = 1;
+      scheduleFrame(flushPending);
+    }
+
+    const unsubscribe = messageBus.subscribeTopic(topic, () => {
+      latestRef.current = messageBus.getLastMessage(topic);
+      pendingRef.current = latestOnlyRef.current ? 1 : pendingRef.current + 1;
+      if (latestRef.current && !hasMessageRef.current) {
+        hasMessageRef.current = true;
+        setHasMessage(true);
+      }
+      scheduleFrame(flushPending);
+    });
+
+    return unsubscribe;
+  }, [flushPending, topic]);
+
+  useEffect(() => {
+    if (!viewportRef.current) return;
+
+    let cancelScheduledResize: (() => void) | null = null;
+    const observer = new ResizeObserver((entries) => {
+      const height = entries[0]?.contentRect.height;
+      if (!height || height <= 0) return;
+      viewportHeightRef.current = height;
+      cancelScheduledResize?.();
+      cancelScheduledResize = scheduleFrame(applyScrollWindow);
+    });
+
+    observer.observe(viewportRef.current);
+    return () => {
+      cancelScheduledResize?.();
+      observer.disconnect();
+    };
+  }, [applyScrollWindow]);
+
+  useEffect(() => {
+    latestRef.current = messageBus.getLastMessage(topic);
+    hasMessageRef.current = !!latestRef.current;
+    setHasMessage(!!latestRef.current);
+    setShapeSignature('');
+    setShapeRows([]);
+    shapeRowsRef.current = [];
+    shapeSignatureRef.current = '';
+    latestValueVisualRef.current.clear();
+    valueNodeRefs.current.clear();
+    pendingPatchRef.current.clear();
+    scrollTopRef.current = 0;
+    scrollWindowRef.current = { startRow: 0, endRow: 0, totalRows: 0 };
+    setScrollWindow({ startRow: 0, endRow: 0, totalRows: 0 });
+    expandedPathsRef.current = new Set(['message']);
+    setExpandedPaths(new Set(['message']));
+    didInitializeExpansionRef.current = false;
+    pendingRef.current = latestRef.current ? 1 : 0;
+    lastDisplayedAtRef.current = performance.now();
+    if (latestRef.current) {
+      scheduleFrame(flushPending);
+    }
+  }, [flushPending, topic]);
+
+  useEffect(() => {
+    applyScrollWindow();
+  }, [applyScrollWindow, expandedPaths, shapeRows]);
+
+  useEffect(() => {
+    if (!latestRef.current) return;
+    latestValueVisualRef.current.clear();
+    pendingRef.current = Math.max(pendingRef.current, 1);
+    scheduleFrame(flushPending);
+  }, [flushPending, isImageTopic, maxBinaryPreviewBytes, maxExpandedDepth, maxRows]);
+
   const visibleRows = useMemo(() => {
     if (shapeRows.length === 0) return [];
     return getVisibleRows(shapeRows, expandedPaths);
   }, [expandedPaths, shapeRows]);
 
-  const totalRows = visibleRows.length;
-  const startRow = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
-  const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN_ROWS * 2;
-  const endRow = Math.min(totalRows, startRow + visibleCount);
-  const windowRows = visibleRows.slice(startRow, endRow);
+  const windowRows = visibleRows.slice(scrollWindow.startRow, scrollWindow.endRow);
 
-  useEffect(() => {
-    if (!displayMessage) return;
-    const nextShape = buildRowsForShape(displayMessage.message, maxExpandedDepth, maxRows);
-    const shapeChanged = nextShape.signature !== shapeSignature;
-    let patchRows = visibleRows.slice(startRow, endRow);
-    if (shapeChanged) {
-      setShapeRows(nextShape.rows);
-      setShapeSignature(nextShape.signature);
-      setStats((prev) => ({ ...prev, shapeMisses: prev.shapeMisses + 1 }));
-      let expandedForShape = expandedPaths;
-      if (!didInitializeExpansionRef.current) {
-        const nextExpanded = new Set<string>(['message']);
-        for (const row of nextShape.rows) {
-          if (row.depth === 1 && row.expandable) {
-            nextExpanded.add(row.path);
-          }
-        }
-        setExpandedPaths(nextExpanded);
-        expandedForShape = nextExpanded;
-        didInitializeExpansionRef.current = true;
+  const registerValueNode = useCallback((path: string, node: HTMLSpanElement | null) => {
+    if (node) {
+      valueNodeRefs.current.set(path, node);
+      let initial = latestValueVisualRef.current.get(path);
+      if (initial == null && latestRef.current) {
+        const value = readValueAtPath(latestRef.current, path);
+        const { maxBinaryPreviewBytes: previewBytes, isImageTopic: hideHex } = configRef.current;
+        initial = describeValue(value, previewBytes, { hideBinaryHex: hideHex });
+        latestValueVisualRef.current.set(path, initial);
       }
-      patchRows = getVisibleRows(nextShape.rows, expandedForShape).slice(startRow, startRow + visibleCount);
+      if (initial != null) {
+        applyValueVisual(node, initial);
+      }
+    } else {
+      valueNodeRefs.current.delete(path);
     }
-
-    const patchMap = new Map<string, ValueVisual>();
-    const maxPatchRows = Math.min(patchRows.length, MAX_VISIBLE_PATCH_ROWS);
-    for (let i = 0; i < maxPatchRows; i++) {
-      const row = patchRows[i];
-      if (!row) continue;
-      const value = readValueAtPath(displayMessage.message, row.path);
-      const visual = describeValue(value, maxBinaryPreviewBytes);
-      latestValueVisualRef.current.set(row.path, visual);
-      const previousText = valueNodeRefs.current.get(row.path)?.textContent ?? null;
-      if (previousText !== visual.text) {
-        patchMap.set(row.path, visual);
-      }
-    }
-    if (patchMap.size > 0) {
-      for (const [path, visual] of patchMap) {
-        pendingPatchRef.current.set(path, visual);
-      }
-      if (patchRafRef.current == null) {
-        patchRafRef.current = requestAnimationFrame(() => {
-          const frameStarted = performance.now();
-          for (const [path, visual] of pendingPatchRef.current) {
-            const node = valueNodeRefs.current.get(path);
-            if (node) {
-              node.textContent = visual.text;
-              if (node.dataset.kind !== visual.kind) {
-                node.dataset.kind = visual.kind;
-                node.style.color = valueColor(visual.kind);
-              }
-            }
-          }
-          pendingPatchRef.current.clear();
-          patchRafRef.current = null;
-          setStats((prev) => ({ ...prev, framePatchMs: performance.now() - frameStarted }));
-        });
-      }
-    }
-
-  }, [
-    displayMessage,
-    endRow,
-    expandedPaths,
-    maxBinaryPreviewBytes,
-    maxExpandedDepth,
-    maxRows,
-    setStats,
-    shapeSignature,
-    startRow,
-    visibleCount,
-    visibleRows,
-  ]);
-
-  useEffect(
-    () => () => {
-      if (patchRafRef.current != null) {
-        cancelAnimationFrame(patchRafRef.current);
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!viewportRef.current) return;
-    const observer = new ResizeObserver((entries) => {
-      const height = entries[0]?.contentRect.height;
-      if (height && height > 0) {
-        setViewportHeight(height);
-      }
-    });
-    observer.observe(viewportRef.current);
-    return () => observer.disconnect();
   }, []);
-
-  useEffect(() => {
-    setShapeSignature('');
-    setShapeRows([]);
-    latestValueVisualRef.current.clear();
-    valueNodeRefs.current.clear();
-    setExpandedPaths(new Set(['message']));
-    didInitializeExpansionRef.current = false;
-  }, [topic]);
 
   const toggleExpand = useCallback((path: string) => {
     setExpandedPaths((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
+      expandedPathsRef.current = next;
       return next;
     });
   }, []);
 
   const copyField = useCallback(
     async (path: string) => {
-      const value = readValueAtPath(displayMessage?.message, path);
+      const value = readValueAtPath(latestRef.current, path);
       const serialized = serializeForCopy(value, binaryCopyFormat);
       const text =
         typeof serialized === 'string' || typeof serialized === 'number' || typeof serialized === 'boolean'
@@ -479,7 +692,15 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
         toast.error(formatMessage({ id: 'panels.rawMessages.copy.error' }));
       }
     },
-    [binaryCopyFormat, displayMessage?.message, formatMessage],
+    [binaryCopyFormat, formatMessage],
+  );
+
+  const handleScroll = useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      scrollTopRef.current = event.currentTarget.scrollTop;
+      scheduleFrame(applyScrollWindow);
+    },
+    [applyScrollWindow],
   );
 
   return (
@@ -487,6 +708,7 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
       <div className="shrink-0 border-b bg-muted px-2 py-1">
         <TopicQuickPicker
           value={topic}
+          topics={topics}
           onChange={(nextTopic) => setConfig((prev) => ({ ...prev, topic: nextTopic }))}
           placeholder={formatMessage({ id: 'panels.framework.topicPicker.placeholder' })}
           className="min-w-0 w-full"
@@ -496,53 +718,20 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
       <div
         ref={viewportRef}
         className="min-h-0 flex-1 overflow-auto p-2 font-mono text-[11px]"
-        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+        onScroll={handleScroll}
       >
-        {displayMessage && totalRows > 0 ? (
-          <div style={{ height: totalRows * ROW_HEIGHT, position: 'relative' }}>
-            <div style={{ transform: `translateY(${startRow * ROW_HEIGHT}px)` }}>
+        {hasMessage && scrollWindow.totalRows > 0 ? (
+          <div style={{ height: scrollWindow.totalRows * ROW_HEIGHT, position: 'relative' }}>
+            <div style={{ transform: `translateY(${scrollWindow.startRow * ROW_HEIGHT}px)` }}>
               {windowRows.map((row) => (
-                <div
+                <RawMessageRow
                   key={row.id}
-                  className="group flex h-[22px] items-center border-b border-border/30"
-                  style={{ paddingLeft: row.depth * 14 }}
-                >
-                  <button
-                    type="button"
-                    className={`mr-1 inline-flex h-4 w-4 items-center justify-center rounded ${row.expandable ? 'hover:bg-muted' : 'opacity-20'}`}
-                    onClick={() => row.expandable && toggleExpand(row.path)}
-                  >
-                    {row.expandable ? (
-                      <ChevronRight
-                        className={`size-3 transition-transform ${expandedPaths.has(row.path) ? 'rotate-90' : ''}`}
-                      />
-                    ) : null}
-                  </button>
-                  <span className="mr-2 text-cyan-300">{row.key}:</span>
-                  <span
-                    ref={(node) => {
-                      if (node) {
-                        valueNodeRefs.current.set(row.path, node);
-                        const initial = latestValueVisualRef.current.get(row.path);
-                        if (initial != null) {
-                          node.textContent = initial.text;
-                          node.dataset.kind = initial.kind;
-                          node.style.color = valueColor(initial.kind);
-                        }
-                      } else {
-                        valueNodeRefs.current.delete(row.path);
-                      }
-                    }}
-                    className="truncate"
-                  />
-                  <button
-                    type="button"
-                    className="ml-2 rounded px-1 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
-                    onClick={() => void copyField(row.path)}
-                  >
-                    COPY
-                  </button>
-                </div>
+                  row={row}
+                  expanded={expandedPaths.has(row.path)}
+                  onToggle={toggleExpand}
+                  onCopy={copyField}
+                  registerValueNode={registerValueNode}
+                />
               ))}
             </div>
           </div>

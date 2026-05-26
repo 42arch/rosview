@@ -72,9 +72,10 @@ Panels may bring their own components instead.
 
 - Panel rendering goes through `PanelRuntimeShell` which seeds the config store and registers tab-header actions.
 - Each panel is wrapped by `PanelErrorBoundary`.
-- Standardised tab-header actions:
+- Standardised tab-header actions (implemented in `PanelTabHeader` / `PanelTabActions`):
   - Gear icon → opens Sidebar `Settings` tab (only when `renderSettings` is provided)
-  - `⋮` menu → `Reset panel`, `Copy panel ID`, `Duplicate panel`, `Close`
+  - Add panel (`+`) and Close (`×`) icon buttons when the tab row is wide enough (see `PANEL_TAB_EXPANDED_MIN_WIDTH_PX` in `src/features/layout/layoutConstants.ts`); otherwise collapsed into a single “more” dropdown — independent of how many tabs share the DockView group
+  - Right-click context menu → `Reset panel`, `Copy panel ID`, `Duplicate panel`, `Close`
 
 ## State and export rules
 
