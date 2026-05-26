@@ -50,6 +50,14 @@ function makeImageMessage(): MessageEvent {
   };
 }
 
+function makeImageMessageAt(sec: number): MessageEvent {
+  return {
+    ...makeImageMessage(),
+    receiveTime: { sec, nsec: 0 },
+    publishTime: { sec, nsec: 0 },
+  };
+}
+
 function makeSource(messages: MessageEvent[]): WorkerSerializedSource {
   return {
     initialize: vi.fn(async () => makeInitialization()),
@@ -81,6 +89,20 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 afterEach(() => {
@@ -346,6 +368,113 @@ describe('IterablePlayer playback clock', () => {
       });
       globalThis.requestAnimationFrame = oldRequestAnimationFrame;
       globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+    }
+  });
+
+  it('does not let an in-flight playback batch overwrite a backward seek', async () => {
+    let now = 0;
+    let nextRafId = 1;
+    const oldPerformanceNow = performance.now;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      value: () => now,
+    });
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      const id = nextRafId++;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
+      rafCallbacks.delete(id);
+    });
+
+    const delayedBatch = deferred<MessageEvent[]>();
+    const source = makeSource([]);
+    const cursor = {
+      nextBatch: vi.fn(() => delayedBatch.promise),
+      end: vi.fn(async () => undefined),
+    };
+    vi.mocked(source.getMessageCursor).mockResolvedValue(cursor as never);
+    const player = new IterablePlayer(source);
+    const seenTimes: number[] = [];
+
+    try {
+      await player.initialize({});
+      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
+      await flushAsyncWork();
+      player.seek({ sec: 7, nsec: 0 });
+      await flushAsyncWork();
+      player.subscribeCurrentTime((time) => {
+        seenTimes.push(time.sec + time.nsec / 1e9);
+      });
+      player.play();
+
+      now = 100;
+      rafCallbacks.get(1)?.(now);
+      await Promise.resolve();
+      expect(cursor.nextBatch).toHaveBeenCalled();
+
+      player.seek({ sec: 5, nsec: 0 });
+      await flushAsyncWork();
+      expect(seenTimes.at(-1)).toBe(5);
+
+      delayedBatch.resolve([makeImageMessageAt(7)]);
+      await flushAsyncWork();
+
+      expect(seenTimes.at(-1)).toBe(5);
+      expect(seenTimes).not.toContain(7.1);
+    } finally {
+      player.close();
+      Object.defineProperty(performance, 'now', {
+        configurable: true,
+        value: oldPerformanceNow,
+      });
+      globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+    }
+  });
+
+  it('keeps the latest seek when older backfill finishes later', async () => {
+    const source = makeSource([]);
+    const firstBackfill = deferred<MessageEvent[]>();
+    const secondBackfill = deferred<MessageEvent[]>();
+    vi.mocked(source.getBackfillMessages).mockImplementation(async ({ time }) => {
+      if (time.sec === 5) {
+        return await firstBackfill.promise;
+      }
+      if (time.sec === 4) {
+        return await secondBackfill.promise;
+      }
+      return [];
+    });
+    const player = new IterablePlayer(source);
+    const seenTimes: number[] = [];
+
+    try {
+      await player.initialize({});
+      player.registerSubscriptions('panel', [{ topic: TOPIC, subscriberId: 'panel' }]);
+      await flushAsyncWork();
+      player.subscribeCurrentTime((time) => {
+        seenTimes.push(time.sec + time.nsec / 1e9);
+      });
+
+      player.seek({ sec: 5, nsec: 0 });
+      await Promise.resolve();
+      player.seek({ sec: 4, nsec: 0 });
+      await Promise.resolve();
+
+      secondBackfill.resolve([makeImageMessageAt(4)]);
+      await flushAsyncWork();
+      firstBackfill.resolve([makeImageMessageAt(5)]);
+      await flushAsyncWork();
+
+      expect(seenTimes.at(-1)).toBe(4);
+      expect(messageBus.getLastMessage(TOPIC)?.receiveTime).toEqual({ sec: 4, nsec: 0 });
+    } finally {
+      player.close();
     }
   });
 });
