@@ -181,6 +181,29 @@ export class SqliteSqljsDb implements SqliteDb {
     }
     return counts;
   }
+
+  async topicTimeRanges(): Promise<Map<string, [min: Time, max: Time]>> {
+    if (this.#context == undefined) {
+      throw new Error('Call open() before retrieving topic time ranges');
+    }
+    const db = this.#context.db;
+
+    const rows =
+      db.exec(`
+    select topics.name,cast(min(messages.timestamp) as TEXT),cast(max(messages.timestamp) as TEXT)
+    from messages
+    inner join topics on messages.topic_id = topics.id
+    group by topics.id`)[0]?.values ?? [];
+    const ranges = new Map<string, [min: Time, max: Time]>();
+    for (const row of rows) {
+      const [topicName, minNsec, maxNsec] = row as [string, string | null, string | null];
+      ranges.set(topicName, [
+        fromNanoSec(BigInt(minNsec ?? 0n)),
+        fromNanoSec(BigInt(maxNsec ?? 0n)),
+      ]);
+    }
+    return ranges;
+  }
 }
 
 class SqlJsMessageRowIterator implements IterableIterator<MessageRow> {
