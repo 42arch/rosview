@@ -1,12 +1,10 @@
-import { McapIndexedReader, McapWriter, type Channel, type Schema } from '@mcap/core';
+import { McapIndexedReader, McapWriter, McapTypes, type Channel, type Schema } from '@mcap/core';
 import { MessageReader, MessageWriter } from '@foxglove/rosmsg2-serialization';
-import rosmsg from '@foxglove/rosmsg';
+import { parse as parseMessageDefinition } from '@foxglove/rosmsg';
 import { JointState2TF } from './embedded/fkEngine.js';
 import { applyJointMapping } from './jointStateMapping';
 import type { UrdfDebugRecipe } from './recipe';
 import { applyUrdfVisualCorrection } from './urdfVisualCorrection';
-
-const { parseMessageDefinition } = rosmsg;
 
 const ROS2_DEFINITIONS = [
   { name: 'builtin_interfaces/msg/Time', definitions: [{ name: 'sec', type: 'int32' }, { name: 'nanosec', type: 'uint32' }] },
@@ -20,35 +18,46 @@ const ROS2_DEFINITIONS = [
   { name: 'sensor_msgs/msg/JointState', definitions: [{ name: 'header', type: 'std_msgs/msg/Header', isComplex: true }, { name: 'name', type: 'string', isArray: true }, { name: 'position', type: 'float64', isArray: true }, { name: 'velocity', type: 'float64', isArray: true }, { name: 'effort', type: 'float64', isArray: true }] },
 ];
 
-class BufferReadable {
-  constructor(private readonly buffer: Uint8Array) {}
+class BufferReadable implements McapTypes.IReadable {
+  private readonly buffer: Uint8Array;
 
-  size() {
-    return BigInt(this.buffer.byteLength);
+  constructor(buffer: Uint8Array) {
+    this.buffer = buffer;
   }
 
-  async read(offset: bigint, size: bigint) {
+  size(): Promise<bigint> {
+    return Promise.resolve(BigInt(this.buffer.byteLength));
+  }
+
+  read(offset: bigint, size: bigint): Promise<Uint8Array> {
     const start = Number(offset);
-    return this.buffer.subarray(start, start + Number(size));
+    return Promise.resolve(this.buffer.subarray(start, start + Number(size)));
   }
 }
 
 class BufferWritable {
-  #chunks: Buffer[] = [];
+  #chunks: Uint8Array[] = [];
   #pos = 0n;
 
   position() {
     return this.#pos;
   }
 
-  async write(buffer: Uint8Array) {
-    const chunk = Buffer.from(buffer);
-    this.#chunks.push(chunk);
-    this.#pos += BigInt(chunk.byteLength);
+  write(buffer: Uint8Array) {
+    this.#chunks.push(buffer);
+    this.#pos += BigInt(buffer.byteLength);
+    return Promise.resolve();
   }
 
-  toBuffer() {
-    return Buffer.concat(this.#chunks);
+  toUint8Array(): Uint8Array {
+    const total = Number(this.#pos);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of this.#chunks) {
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return out;
   }
 }
 
@@ -57,7 +66,7 @@ function prepareUrdfFromRecipe(urdfXml: string, recipe: UrdfDebugRecipe): string
   return applyUrdfVisualCorrection(urdfXml, {
     rotateMeshVisuals: !!urdf.rotateMeshVisuals,
     visualRpyOffset: Array.isArray(urdf.visualRpyOffset)
-      ? (urdf.visualRpyOffset as [number, number, number])
+      ? urdf.visualRpyOffset
       : [0, 0, 0],
   });
 }
@@ -271,5 +280,5 @@ export async function processMcapBuffer({
   }
 
   await writer.end();
-  return { output: writable.toBuffer(), processedJointStates };
+  return { output: writable.toUint8Array(), processedJointStates };
 }

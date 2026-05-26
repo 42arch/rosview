@@ -14,13 +14,20 @@ describe('describeValue', () => {
     value[0] = 0xff;
     value[7] = 0x00;
     const visual = describeValue(value, 256);
-    expect(visual.text).toBe('Uint8Array(2048) 0xff00000000000000...');
+    expect(visual.text).toBe(
+      'Uint8Array(2048) 0xff00000000000000000000000000000000000000000000000000000000000000...',
+    );
   });
 
   it('shows compact hex preview for image topics regardless of size', () => {
-    const value = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09]);
+    const value = new Uint8Array(40);
+    for (let i = 0; i < value.length; i++) {
+      value[i] = i + 1;
+    }
     const visual = describeValue(value, 256, { hideBinaryHex: true });
-    expect(visual.text).toBe('Uint8Array(9) 0x0102030405060708...');
+    expect(visual.text).toBe(
+      'Uint8Array(40) 0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20...',
+    );
   });
 
   it('formats ROS time values', () => {

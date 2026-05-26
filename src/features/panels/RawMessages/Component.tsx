@@ -375,6 +375,7 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
   const valueNodeRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
   const latestValueVisualRef = useRef<Map<string, ValueVisual>>(new Map());
   const pendingPatchRef = useRef<Map<string, ValueVisual>>(new Map());
+  const flushPendingRef = useRef<() => void>(() => {});
   const didInitializeExpansionRef = useRef(false);
 
   const [hasMessage, setHasMessage] = useState(() => !!messageBus.getLastMessage(topic));
@@ -507,7 +508,9 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
     }
 
     if (now - lastDisplayedAtRef.current < minInterval) {
-      scheduleFrame(flushPending);
+      scheduleFrame(() => {
+        flushPendingRef.current();
+      });
       return;
     }
 
@@ -550,6 +553,10 @@ export const RawMessagesPanel: React.FC<RawMessagesPanelProps> = ({
 
     patchVisibleValues(message);
   }, [applyScrollWindow, patchVisibleValues]);
+
+  useEffect(() => {
+    flushPendingRef.current = flushPending;
+  });
 
   useEffect(() => {
     if (!pauseUpdates && pendingRef.current > 0) {
