@@ -278,6 +278,7 @@
   contain: layout style;
 }
 
+/* Breakpoint: layoutConstants.ts → SIDEBAR_COMPACT_MAX_WIDTH_PX */
 @container sidebar (max-width: 320px) {
   #rosview-root .topic-row-count-extra {
     display: none;

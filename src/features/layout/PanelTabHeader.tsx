@@ -1,19 +1,8 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import type { IDockviewPanelHeaderProps } from 'dockview';
-import { MoreHorizontal, Plus, Settings2, X } from 'lucide-react';
 import { useIntl } from 'react-intl';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from '@/shared/ui/dropdown-menu';
-import { Button, buttonVariants } from '@/shared/ui/button';
 import { Separator } from '@/shared/ui/separator';
-import { cn } from '@/shared/lib/utils';
+import { useElementWidth } from '@/shared/hooks/useElementWidth';
 import type { PanelType } from '../panels/framework';
 import { getPanelTypeFromId, listPanelStates, usePanelActions } from '../panels/framework';
 import { PANEL_TYPE_MESSAGE_SLUG } from '../panels/framework/panelMessageSlug';
@@ -25,10 +14,9 @@ import {
 import { WELCOME_PANEL_ID } from './dockviewIds';
 import { openDockviewPanel } from './dockviewController';
 import { getFoxgloveAdapter, getPanelDefinition, getPanelDefinitions, hasFoxgloveAdapter, hasPanelDefinition } from '../panels/registry';
-import {
-  PanelTabAddPanelDefinitionsSubmenus,
-  panelTabDropdownIconRowClass,
-} from './PanelTabAddPanelDefinitionsSubmenus';
+import { PanelTabAddPanelDefinitionsSubmenus } from './PanelTabAddPanelDefinitionsSubmenus';
+import { PanelTabActions } from './PanelTabActions';
+import { PANEL_TAB_EXPANDED_MIN_WIDTH_PX } from './layoutConstants';
 
 /** Tab label uses localized panel titles (`panels.<slug>.defaultTitle`). */
 function resolveTabDefaultTitle(panelId: string, dockviewTitle: string): string {
@@ -62,13 +50,6 @@ function resolveTabPanelType(panelId: string): PanelType | null {
   return null;
 }
 
-const addPanelMenuContentClassName = 'max-h-[min(24rem,70vh)] overflow-y-auto';
-
-const tabIconButtonClassName = cn(
-  buttonVariants({ variant: 'ghost', size: 'icon' }),
-  'ros-dockview-tab-action h-8 w-8 shrink-0 font-normal focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 ring-offset-background [&_svg]:size-3.5',
-);
-
 export const PanelTabHeader: React.FC<IDockviewPanelHeaderProps> = ({ api, containerApi }) => {
   const { formatMessage } = useIntl();
   const panel = containerApi.getPanel(api.id);
@@ -84,7 +65,10 @@ export const PanelTabHeader: React.FC<IDockviewPanelHeaderProps> = ({ api, conta
   }, [formatMessage, panelType, defaultTitleFallback]);
   const actions = usePanelActions(api.id);
   const isWelcome = api.id === WELCOME_PANEL_ID;
-  const isCompactTabActions = (panel?.group.panels.length ?? 0) > 1;
+  const tabRowRef = useRef<HTMLDivElement>(null);
+  const tabWidth = useElementWidth(tabRowRef);
+  const useCompactTabActions =
+    tabWidth === undefined ? true : tabWidth < PANEL_TAB_EXPANDED_MIN_WIDTH_PX;
   const definitions = useMemo(
     () => getPanelDefinitions().filter((d) => d.type !== 'Unavailable'),
     [],
@@ -147,6 +131,7 @@ export const PanelTabHeader: React.FC<IDockviewPanelHeaderProps> = ({ api, conta
 
   return (
     <div
+      ref={tabRowRef}
       className="ros-dockview-tab-row flex items-center w-full min-w-0 h-full gap-1 px-2 box-border"
       onContextMenu={onTabContextMenu}
     >
@@ -169,121 +154,14 @@ export const PanelTabHeader: React.FC<IDockviewPanelHeaderProps> = ({ api, conta
               event.stopPropagation();
             }}
           >
-            {isCompactTabActions ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className={tabIconButtonClassName}
-                    title={formatMessage({ id: 'layout.panelTab.moreTitle' })}
-                    aria-label={formatMessage({ id: 'layout.panelTab.moreAria' })}
-                    data-testid="panel-tab-more-button"
-                  >
-                    <MoreHorizontal className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="end"
-                  className={addPanelMenuContentClassName}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {actions?.hasSettings && (
-                    <DropdownMenuItem
-                      className={panelTabDropdownIconRowClass}
-                      data-testid="panel-tab-settings-button"
-                      onSelect={() => {
-                        openSettings();
-                      }}
-                    >
-                      <Settings2 className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
-                      {formatMessage({ id: 'layout.panelTab.openSettings' })}
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger className="gap-2">
-                      <Plus className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
-                      {formatMessage({ id: 'layout.panelTab.addPanelSubmenu' })}
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent className={addPanelMenuContentClassName}>
-                      {addPanelSubmenus}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                  <DropdownMenuItem
-                    className={cn(panelTabDropdownIconRowClass, 'text-destructive focus:bg-destructive/10 focus:text-destructive')}
-                    data-testid="panel-tab-close-button"
-                    onSelect={() => {
-                      closePanel();
-                    }}
-                  >
-                    <X className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
-                    {formatMessage({ id: 'layout.panelTab.closePanel' })}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <>
-                {actions?.hasSettings && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className={tabIconButtonClassName}
-                    title={formatMessage({ id: 'layout.panelTab.openSettingsTitle' })}
-                    aria-label={formatMessage({ id: 'layout.panelTab.openSettingsAria' })}
-                    data-testid="panel-tab-settings-button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      event.preventDefault();
-                      openSettings();
-                    }}
-                  >
-                    <Settings2 className="h-3.5 w-3.5" aria-hidden />
-                  </Button>
-                )}
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className={tabIconButtonClassName}
-                      title={formatMessage({ id: 'layout.panelTab.addPanelTitle' })}
-                      aria-label={formatMessage({ id: 'layout.panelTab.addPanelAria' })}
-                      data-testid="panel-tab-add-button"
-                    >
-                      <Plus className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="end"
-                    className={addPanelMenuContentClassName}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {addPanelSubmenus}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className={tabIconButtonClassName}
-                  title={formatMessage({ id: 'layout.panelTab.closePanelTitle' })}
-                  aria-label={formatMessage({ id: 'layout.panelTab.closePanelAria' })}
-                  data-testid="panel-tab-close-button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    event.preventDefault();
-                    closePanel();
-                  }}
-                >
-                  <X className="h-3.5 w-3.5" aria-hidden />
-                </Button>
-              </>
-            )}
+            <PanelTabActions
+              compact={useCompactTabActions}
+              hasSettings={actions?.hasSettings ?? false}
+              onOpenSettings={openSettings}
+              onClose={closePanel}
+              addPanelSubmenus={addPanelSubmenus}
+              formatMessage={formatMessage}
+            />
           </div>
         </>
       )}
