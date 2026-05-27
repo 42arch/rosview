@@ -7,13 +7,15 @@ import { SampleDatasetDialog } from '@/features/workspace/common/SampleDatasetDi
 import { getArchiveUrl, getSampleDatasetsManifestUrl, loadSampleDatasets } from '@/services/sampleDatasets';
 import type { SampleDataset } from '@/services/sampleDatasets';
 import { extractRosFilesFromTarArchive } from '@/shared/utils/tarRosRecordings';
-import { WorkerSerializedSource } from '@/infra/workers/WorkerSerializedSource';
+import { WorkerSerializedSource, isWorkerSourceCancelledError } from '@/infra/workers/WorkerSerializedSource';
 import { IterablePlayer } from '@/core/players/IterablePlayer';
 import { MinimalPlayer } from '@/core/players/MinimalPlayer';
 import type { Player } from '@/core/types/player';
 import { useMessagePipelineStore } from '@/core/pipeline/store';
 import { Navbar } from '@/features/workspace/navbar/Navbar';
 import { WelcomeScreen } from '@/features/workspace/common/WelcomeScreen';
+import { LoadingOverlay } from '@/features/workspace/common/LoadingOverlay';
+import { Skeleton } from '@/shared/ui/skeleton';
 import type { DatasetItem, FileListItem } from '@/shared/utils/datasetSources';
 import {
   datasetItemsFromListItems,
@@ -771,6 +773,11 @@ export const RosViewer: React.FC<RosViewerProps> = (props) => {
           }
           return;
         } catch (err) {
+          if (cancelled || isWorkerSourceCancelledError(err)) {
+            newPlayer.close();
+            createdPlayer = null;
+            return;
+          }
           lastErr = err;
           newPlayer.close();
           createdPlayer = null;
@@ -1166,6 +1173,7 @@ export const RosViewer: React.FC<RosViewerProps> = (props) => {
       onSubmitRemoteUrl={handleOpenRemoteRecordingUrl}
       remoteSubmitLoading={remoteUrlBusy}
       onSelectSample={handleSelectSample}
+      onCancelLoading={handleGoHome}
       historyItems={historyItems}
       onReplayHistory={(id) => void handleReplayHistory(id)}
       onDropRosRecordingFiles={handleDropRosRecordingFiles}
@@ -1326,23 +1334,33 @@ export const RosViewer: React.FC<RosViewerProps> = (props) => {
               recentHistoryItems={historyItems.slice(0, 10)}
               onReplayHistory={(id) => void handleReplayHistory(id)}
             />
-            <WelcomeScreen
-              isLoading={!lastLoadError && !manualOpenHint}
-              loadingSourceName={loadingSourceName}
-              manualOpenHint={manualOpenHint}
-              onOpenFile={() => {
-                clearOpenFeedback();
-                void handleOpenRecordingFiles();
-              }}
-              onOpenDirectory={handleOpenDirectory}
-              onOpenTarPicker={() => document.getElementById('rosview-inline-tar')?.click()}
-              onSubmitRemoteUrl={handleOpenRemoteRecordingUrl}
-              remoteSubmitLoading={remoteUrlBusy}
-              onSelectSample={handleSelectSample}
-              onRequestChangeRemoteUrl={openRemotePrompt}
-              historyItems={historyItems}
-              onReplayHistory={(id) => void handleReplayHistory(id)}
-            />
+            {!lastLoadError && !manualOpenHint ? (
+              <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+                  <Skeleton className="h-8 w-40" />
+                  <Skeleton className="min-h-0 flex-1 rounded-lg" />
+                </div>
+                <LoadingOverlay
+                  sourceName={loadingSourceName}
+                  onCancel={handleGoHome}
+                />
+              </div>
+            ) : (
+              <WelcomeScreen
+                manualOpenHint={manualOpenHint}
+                onOpenFile={() => {
+                  clearOpenFeedback();
+                  void handleOpenRecordingFiles();
+                }}
+                onOpenDirectory={handleOpenDirectory}
+                onOpenTarPicker={() => document.getElementById('rosview-inline-tar')?.click()}
+                onSubmitRemoteUrl={handleOpenRemoteRecordingUrl}
+                remoteSubmitLoading={remoteUrlBusy}
+                onSelectSample={handleSelectSample}
+                historyItems={historyItems}
+                onReplayHistory={(id) => void handleReplayHistory(id)}
+              />
+            )}
             <SampleDatasetDialog
               open={sampleDialogOpen}
               onOpenChange={setSampleDialogOpen}
