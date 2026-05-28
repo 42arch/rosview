@@ -103,9 +103,16 @@ class McapWorkerImpl implements IWorkerSerializedSourceWorker {
         throw new Error("McapWorker: neither url nor file provided");
       }
 
+      const zstdWasmBinary = args.zstdWasmBinary;
+      if (!(zstdWasmBinary instanceof ArrayBuffer)) {
+        throw new Error(
+          "McapWorker: zstdWasmBinary required (pass wasm bytes from main thread for inline workers)",
+        );
+      }
+
       const decompressHandlers = await workerPerf.timeAsync(
         "initialize.loadDecompressHandlers",
-        () => loadDecompressHandlers(),
+        () => loadDecompressHandlers({ wasmBinary: zstdWasmBinary }),
       );
       
       const mcapReadable = {
