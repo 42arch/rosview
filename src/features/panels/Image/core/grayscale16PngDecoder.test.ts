@@ -61,6 +61,8 @@ describe('decodeGrayscale16Png', () => {
     ]);
 
     const decoded = await decodeGrayscale16Png(png);
+    expect(decoded.width).toBe(width);
+    expect(decoded.height).toBe(height);
     const view = new DataView(decoded.data.buffer, decoded.data.byteOffset, decoded.data.byteLength);
     expect(view.getUint16(0, true)).toBe(1000);
     expect(view.getUint16(2, true)).toBe(2000);
@@ -70,7 +72,7 @@ describe('decodeGrayscale16Png', () => {
 function crc32(data: Uint8Array): number {
   let c = 0xffffffff;
   for (let i = 0; i < data.length; i++) {
-    c ^= data[i]!;
+    c ^= data[i];
     for (let k = 0; k < 8; k++) {
       c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
     }

@@ -35,7 +35,7 @@ function unfilterSub(
     newLine[i] = currentLine[i]!;
   }
   for (; i < bytesPerLine; i++) {
-    newLine[i] = (currentLine[i]! + newLine[i - bytesPerPixel]!) & 0xff;
+    newLine[i] = (currentLine[i] + newLine[i - bytesPerPixel]) & 0xff;
   }
 }
 
@@ -52,7 +52,7 @@ function unfilterUp(
     return;
   }
   for (let i = 0; i < bytesPerLine; i++) {
-    newLine[i] = (currentLine[i]! + prevLine[i]!) & 0xff;
+    newLine[i] = (currentLine[i] + prevLine[i]) & 0xff;
   }
 }
 
@@ -69,16 +69,16 @@ function unfilterAverage(
       newLine[i] = currentLine[i]!;
     }
     for (; i < bytesPerLine; i++) {
-      newLine[i] = (currentLine[i]! + (newLine[i - bytesPerPixel]! >> 1)) & 0xff;
+      newLine[i] = (currentLine[i] + (newLine[i - bytesPerPixel] >> 1)) & 0xff;
     }
     return;
   }
   for (; i < bytesPerPixel; i++) {
-    newLine[i] = (currentLine[i]! + (prevLine[i]! >> 1)) & 0xff;
+    newLine[i] = (currentLine[i] + (prevLine[i] >> 1)) & 0xff;
   }
   for (; i < bytesPerLine; i++) {
     newLine[i] =
-      (currentLine[i]! + ((newLine[i - bytesPerPixel]! + prevLine[i]!) >> 1)) & 0xff;
+      (currentLine[i] + ((newLine[i - bytesPerPixel] + prevLine[i]) >> 1)) & 0xff;
   }
 }
 
@@ -95,20 +95,20 @@ function unfilterPaeth(
       newLine[i] = currentLine[i]!;
     }
     for (; i < bytesPerLine; i++) {
-      newLine[i] = (currentLine[i]! + newLine[i - bytesPerPixel]!) & 0xff;
+      newLine[i] = (currentLine[i] + newLine[i - bytesPerPixel]) & 0xff;
     }
     return;
   }
   for (; i < bytesPerPixel; i++) {
-    newLine[i] = (currentLine[i]! + prevLine[i]!) & 0xff;
+    newLine[i] = (currentLine[i] + prevLine[i]) & 0xff;
   }
   for (; i < bytesPerLine; i++) {
     newLine[i] =
-      (currentLine[i]! +
+      (currentLine[i] +
         paethPredictor(
-          newLine[i - bytesPerPixel]!,
-          prevLine[i]!,
-          prevLine[i - bytesPerPixel]!,
+          newLine[i - bytesPerPixel],
+          prevLine[i],
+          prevLine[i - bytesPerPixel],
         )) &
       0xff;
   }
@@ -137,7 +137,7 @@ export function unfilter16BitGrayscaleScanlines(
   let offset = 0;
 
   for (let row = 0; row < height; row++) {
-    const filterType = inflated[offset++]!;
+    const filterType = inflated[offset++];
     const currentLine = inflated.subarray(offset, offset + bytesPerLine);
     offset += bytesPerLine;
     const newLine = out.subarray(row * bytesPerLine, (row + 1) * bytesPerLine);
@@ -166,7 +166,7 @@ export function unfilter16BitGrayscaleScanlines(
 
   // PNG stores 16-bit samples big-endian; RawImage decode expects little-endian.
   for (let i = 0; i < out.length; i += 2) {
-    const t = out[i]!;
+    const t = out[i];
     out[i] = out[i + 1]!;
     out[i + 1] = t;
   }

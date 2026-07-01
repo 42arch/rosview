@@ -49,7 +49,7 @@ describe('compressed depth colorization', () => {
       const o = i * 4;
       if (value === 0) {
         zeroCount++;
-        if (isDarkBlue(rgba[o]!, rgba[o + 1]!, rgba[o + 2]!)) zeroDarkBlue++;
+        if (isDarkBlue(rgba[o], rgba[o + 1], rgba[o + 2])) zeroDarkBlue++;
       }
       if (value >= DEFAULT_DEPTH_16UC1_COLOR_MIN && value <= DEFAULT_DEPTH_16UC1_COLOR_MAX) {
         if (value < minDepth) {

@@ -45,7 +45,7 @@ function concatIdatChunks(png: Uint8Array): Uint8Array {
   while (offset + 8 <= png.byteLength) {
     const length = readU32Be(view, offset);
     const type =
-      String.fromCharCode(png[offset + 4]!, png[offset + 5]!, png[offset + 6]!, png[offset + 7]!);
+      String.fromCharCode(png[offset + 4], png[offset + 5], png[offset + 6], png[offset + 7]);
     const dataStart = offset + 8;
     const dataEnd = dataStart + length;
     if (dataEnd + 4 > png.byteLength) {
@@ -97,10 +97,10 @@ function parseIhdr(png: Uint8Array): { width: number; height: number; bitDepth: 
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
   const firstLength = readU32Be(view, PNG_SIGNATURE.byteLength);
   const firstType = String.fromCharCode(
-    png[PNG_SIGNATURE.byteLength + 4]!,
-    png[PNG_SIGNATURE.byteLength + 5]!,
-    png[PNG_SIGNATURE.byteLength + 6]!,
-    png[PNG_SIGNATURE.byteLength + 7]!,
+    png[PNG_SIGNATURE.byteLength + 4],
+    png[PNG_SIGNATURE.byteLength + 5],
+    png[PNG_SIGNATURE.byteLength + 6],
+    png[PNG_SIGNATURE.byteLength + 7],
   );
   if (firstType !== 'IHDR' || firstLength !== 13) {
     throw new Error('PNG is missing IHDR chunk');
@@ -110,8 +110,8 @@ function parseIhdr(png: Uint8Array): { width: number; height: number; bitDepth: 
   return {
     width: readU32Be(view, ihdrOffset),
     height: readU32Be(view, ihdrOffset + 4),
-    bitDepth: png[ihdrOffset + 8]!,
-    colorType: png[ihdrOffset + 9]!,
+    bitDepth: png[ihdrOffset + 8],
+    colorType: png[ihdrOffset + 9],
   };
 }
 
