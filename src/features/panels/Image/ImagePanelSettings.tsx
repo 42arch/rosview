@@ -13,7 +13,8 @@ import {
 } from '../framework/settings';
 import { messageBus } from '@/core/pipeline/messageBus';
 import { useTopicSeq } from '@/core/pipeline/useMessageBus';
-import { isRawImageMessage, isRawImageTopicSchema, IMAGE_PANEL_TOPIC_INCLUDES } from './core/imageTypes';
+import { isRawImageMessage, isRawImageTopicSchema, isCompressedImageMessage, depthEncodingFromFormat, IMAGE_PANEL_TOPIC_INCLUDES } from './core/imageTypes';
+import { applyDepthTopicPreset, defaultDepthMaxValue, defaultDepthMinValue } from './core/depthColorDefaults';
 import type { ImageConfig } from './defaults';
 
 const DEPTH_ENCODINGS = new Set(['mono16', '16uc1', '32fc1']);
@@ -43,6 +44,9 @@ function useLastFrameEncoding(topic: string): string | null {
   const msg = event.message;
   if (isRawImageMessage(msg)) {
     return msg.encoding.trim().toLowerCase();
+  }
+  if (isCompressedImageMessage(msg)) {
+    return depthEncodingFromFormat(msg.format);
   }
   return null;
 }
@@ -99,6 +103,18 @@ export function ImagePanelSettings({
     encodingForDepthSliders != null && DEPTH_ENCODINGS.has(encodingForDepthSliders)
       ? depthSliderBounds(encodingForDepthSliders)
       : { min: 0, max: 65535 };
+  const sliderDefaultMax =
+    encodingForDepthSliders != null
+      ? defaultDepthMaxValue(encodingForDepthSliders, config.topic)
+      : sliderBounds.max;
+  const sliderDefaultMin =
+    encodingForDepthSliders != null
+      ? defaultDepthMinValue(encodingForDepthSliders, config.topic)
+      : sliderBounds.min;
+
+  const applyTopicChange = (topic: string) => {
+    setConfig(applyDepthTopicPreset(topic, config));
+  };
 
   return (
     <div className="space-y-2">
@@ -109,7 +125,7 @@ export function ImagePanelSettings({
           >
             <TopicAutocomplete
               value={config.topic}
-              onChange={(topic) => setConfig({ ...config, topic })}
+              onChange={applyTopicChange}
               topics={topics}
               typeIncludes={[...IMAGE_PANEL_TOPIC_INCLUDES]}
               placeholder={formatMessage({ id: 'panels.image.settings.field.topic.placeholder' })}
@@ -295,7 +311,7 @@ export function ImagePanelSettings({
                       )}
                     >
                       <SettingsSlider
-                        value={config.minValue ?? sliderBounds.min}
+                        value={config.minValue ?? sliderDefaultMin}
                         onChange={(minValue) => setConfig({ ...config, minValue })}
                         min={sliderBounds.min}
                         max={sliderBounds.max}
@@ -310,7 +326,7 @@ export function ImagePanelSettings({
                       )}
                     >
                       <SettingsSlider
-                        value={config.maxValue ?? sliderBounds.max}
+                        value={config.maxValue ?? sliderDefaultMax}
                         onChange={(maxValue) => setConfig({ ...config, maxValue })}
                         min={sliderBounds.min}
                         max={sliderBounds.max}

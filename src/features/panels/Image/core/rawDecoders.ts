@@ -4,6 +4,7 @@ import {
   type ColorRGBA,
   type RawImageDecodeOptions,
 } from './imageColorMode';
+import { resolveDepthColorRange } from './depthColorDefaults';
 
 export interface RawImageLike {
   encoding: string;
@@ -194,8 +195,7 @@ function decodeFloat1c(
     throw new Error(`Float image row step (${step}) must be at least 4*width (${width * 4})`);
   }
 
-  const minV = colorOpts.minValue ?? 0;
-  const maxV = colorOpts.maxValue ?? 1;
+  const { minValue: minV, maxValue: maxV } = resolveDepthColorRange('32fc1', colorOpts);
   let converter;
   try {
     converter = getColorConverter(colorOpts, minV, maxV);
@@ -259,13 +259,13 @@ function decodeMono16(
   isBigEndian: boolean,
   output: Uint8ClampedArray,
   colorOpts: RawImageDecodeOptions,
+  encoding: string,
 ): void {
   if (step < width * 2) {
     throw new Error(`Mono16 image row step (${step}) must be at least 2*width (${width * 2})`);
   }
 
-  const minValue = colorOpts.minValue ?? 0;
-  const maxValue = colorOpts.maxValue ?? 65535;
+  const { minValue, maxValue } = resolveDepthColorRange(encoding, colorOpts);
   let converter;
   try {
     converter = getColorConverter(colorOpts, minValue, maxValue);
@@ -406,7 +406,7 @@ export function decodeRawImage(
       return;
     case 'mono16':
     case '16uc1':
-      decodeMono16(data, width, height, step, isBigEndian, output, colorOpts);
+      decodeMono16(data, width, height, step, isBigEndian, output, colorOpts, encoding);
       return;
     case '32fc1':
       decodeFloat1c(data, width, height, step, isBigEndian, output, colorOpts);

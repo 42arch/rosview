@@ -1,6 +1,5 @@
 /**
- * Depth / mono16 colorization (Foxglove-style), without THREE.js dependency.
- * Ported from studio/packages/studio-base/src/panels/ThreeDeeRender/renderables/colorMode.ts
+ * Scalar depth colorization (turbo / rainbow / gradient) for mono16 and float depth.
  */
 
 export interface ColorRGBA {
@@ -121,11 +120,12 @@ function turboLinear(output: ColorRGBA, pct: number): void {
   const v4r = 1 * kRedVec4[0] + x * kRedVec4[1] + x2 * kRedVec4[2] + x3 * kRedVec4[3];
   const v4g = 1 * kGreenVec4[0] + x * kGreenVec4[1] + x2 * kGreenVec4[2] + x3 * kGreenVec4[3];
   const v4b = 1 * kBlueVec4[0] + x * kBlueVec4[1] + x2 * kBlueVec4[2] + x3 * kBlueVec4[3];
-  const v2x = x2;
-  const v2y = x3;
-  const dot2r = v2x * kRedVec2[0] + v2y * kRedVec2[1];
-  const dot2g = v2x * kGreenVec2[0] + v2y * kGreenVec2[1];
-  const dot2b = v2x * kBlueVec2[0] + v2y * kBlueVec2[1];
+  // GLSL: vec2 v2 = v4.zw * v4.z → (x^4, x^5)
+  const x4 = x2 * x2;
+  const x5 = x3 * x2;
+  const dot2r = x4 * kRedVec2[0] + x5 * kRedVec2[1];
+  const dot2g = x4 * kGreenVec2[0] + x5 * kGreenVec2[1];
+  const dot2b = x4 * kBlueVec2[0] + x5 * kBlueVec2[1];
   output.r = clamp(v4r + dot2r, 0, 1);
   output.g = clamp(v4g + dot2g, 0, 1);
   output.b = clamp(v4b + dot2b, 0, 1);

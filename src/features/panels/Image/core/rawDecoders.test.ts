@@ -32,6 +32,23 @@ describe('decodeRawImage', () => {
     expect(Array.from(output)).toEqual([0, 0, 0, 255, 255, 255, 255, 255]);
   });
 
+  it('decodes 16uc1 using default depth colormap range when maxValue is omitted', () => {
+    const output = new Uint8ClampedArray(4);
+    decodeRawImage(
+      {
+        encoding: '16UC1',
+        width: 1,
+        height: 1,
+        data: new Uint8Array([0x00, 0x00]),
+      },
+      output,
+      { colorMode: 'colormap', colorMap: 'turbo' },
+    );
+
+    expect(output[2]).toBeGreaterThan(output[1]);
+    expect(output[3]).toBe(255);
+  });
+
   it('decodes 16uc1 using grayscale normalization', () => {
     const output = new Uint8ClampedArray(4);
     decodeRawImage(

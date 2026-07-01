@@ -16,6 +16,7 @@ import {
 } from './core/imageTypes';
 import { repairH264Seek } from './core/h264SeekRepair';
 import { isH264MessageEvent, toWorkerFrame } from './core/messageFrameAdapter';
+import { applyDepthTopicPreset } from './core/depthColorDefaults';
 import type { ImageConfig } from './defaults';
 import { TopicQuickPicker } from '../framework/TopicQuickPicker';
 import ImageRenderWorkerClass from './core/ImageRender.worker.ts?worker&inline';
@@ -306,7 +307,7 @@ export const ImagePanel: React.FC<ImagePanelProps> = (props) => {
       <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-950">
         <TopicQuickPicker
           value={topic}
-          onChange={(nextTopic) => setConfig((prev) => ({ ...prev, topic: nextTopic }))}
+          onChange={(nextTopic) => setConfig((prev) => applyDepthTopicPreset(nextTopic, prev))}
           typeIncludes={[...IMAGE_PANEL_TOPIC_INCLUDES]}
           placeholder={formatMessage({ id: 'panels.framework.topicPicker.imagePlaceholder' })}
           className="min-w-0 flex-1"

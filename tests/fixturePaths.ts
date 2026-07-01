@@ -10,6 +10,7 @@ export const MCAP_BASIC = path.join(EXAMPLES_DIR, 'test_5s.mcap');
 export const MCAP_POSE = path.join(EXAMPLES_DIR, 'test_pose.mcap');
 export const MCAP_3CAM = path.join(EXAMPLES_DIR, 'test_3cam.mcap');
 export const MCAP_H264 = path.join(EXAMPLES_DIR, 'test_h264.mcap');
+export const MCAP_COMPRESSED_DEPTH = path.join(EXAMPLES_DIR, 'test_compressed_depth.mcap');
 export const HDF5_MINIMAL = path.join(EXAMPLES_DIR, 'test_minimal.hdf5');
 export const BVH_MINIMAL = path.join(EXAMPLES_DIR, 'test_minimal.bvh');
 
@@ -17,6 +18,7 @@ export const MCAP_BASIC_URL = '/examples/test_5s.mcap';
 export const MCAP_POSE_URL = '/examples/test_pose.mcap';
 export const MCAP_3CAM_URL = '/examples/test_3cam.mcap';
 export const MCAP_H264_URL = '/examples/test_h264.mcap';
+export const MCAP_COMPRESSED_DEPTH_URL = '/examples/test_compressed_depth.mcap';
 export const HDF5_MINIMAL_URL = '/examples/test_minimal.hdf5';
 export const BVH_MINIMAL_URL = '/examples/test_minimal.bvh';
 
