@@ -1,11 +1,13 @@
 /// <reference lib="webworker" />
 
 import type { Time } from '@/core/types/ros';
+import { decodeCompressedDepth } from './compressedDepthDecoder';
 import { decodeRawImage } from './rawDecoders';
 import { getH264ChunkType } from './h264';
 import { withTimeout } from './asyncTimeout';
 import {
   getCompressedKind,
+  isCompressedDepthFormat,
   normalizeCompressedMime,
   type ImageSurfaceStatus,
 } from './imageTypes';
@@ -396,11 +398,27 @@ class ImageRenderWorkerRuntime {
     this.#emitStatus({ phase: 'decoding', receiveTime: frame.receiveTime });
     try {
       if (frame.kind === 'compressed') {
-        const kind = getCompressedKind(frame.format);
         const bytes = ensureOwnedBytes(frame.data);
         if (bytes.byteLength === 0) {
           throw new Error(`Compressed image payload is empty: ${frame.format}`);
         }
+
+        // ROS compressedDepth: PNG → 16UC1/32FC1, then same colormap path as RawImage.
+        if (isCompressedDepthFormat(frame.format)) {
+          const decoded = await decodeCompressedDepth(bytes, frame.format);
+          this.#renderRawFrame({
+            receiveTime: frame.receiveTime,
+            encoding: decoded.encoding,
+            width: decoded.width,
+            height: decoded.height,
+            step: decoded.step,
+            isBigEndian: decoded.isBigEndian,
+            data: ensureOwnedBytes(decoded.data),
+          });
+          return;
+        }
+
+        const kind = getCompressedKind(frame.format);
         const sortKey = timeToKey(frame.receiveTime);
 
         if (kind === 'h264') {
@@ -471,52 +489,14 @@ class ImageRenderWorkerRuntime {
 
       // Raw frame
       const bytes = ensureOwnedBytes(frame.data);
-      const pixelBytes = frame.width * frame.height * 4;
-      let rgba = this.#rawRgba;
-      if (!rgba || rgba.length !== pixelBytes) {
-        rgba = new Uint8ClampedArray(pixelBytes);
-        this.#rawRgba = rgba;
-      }
-      if (!this.#rawImageData || this.#rawImageData.width !== frame.width || this.#rawImageData.height !== frame.height) {
-        this.#rawImageData = new ImageData(rgba, frame.width, frame.height);
-      }
-
-      const step = frame.step ?? (frame.width * bytesPerPixel(frame.encoding));
-      const isBigEndian = frame.isBigEndian ?? false;
-
-      decodeRawImage(
-        {
-          encoding: frame.encoding,
-          width: frame.width,
-          height: frame.height,
-          step,
-          is_bigendian: isBigEndian,
-          data: bytes,
-        },
-        rgba,
-        this.#rawDecodeOptions,
-      );
-
-      // Store source bytes so rawDecodeOptions changes can re-decode immediately.
-      this.#disposeCachedBitmap();
-      this.#cachedFrame = {
-        kind: 'raw',
+      this.#renderRawFrame({
+        receiveTime: frame.receiveTime,
+        encoding: frame.encoding,
         width: frame.width,
         height: frame.height,
-        encoding: frame.encoding,
-        step,
-        isBigEndian,
+        step: frame.step ?? (frame.width * bytesPerPixel(frame.encoding)),
+        isBigEndian: frame.isBigEndian ?? false,
         data: bytes,
-        receiveTime: frame.receiveTime,
-      };
-
-      this.#drawRawImageData(frame.width, frame.height);
-      this.#emitStatus({
-        phase: 'ready',
-        width: frame.width,
-        height: frame.height,
-        encoding: frame.encoding,
-        receiveTime: frame.receiveTime,
       });
     } catch (error) {
       this.#haltUntilReset = true;
@@ -525,6 +505,60 @@ class ImageRenderWorkerRuntime {
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  #renderRawFrame(frame: {
+    receiveTime: Time;
+    encoding: string;
+    width: number;
+    height: number;
+    step: number;
+    isBigEndian: boolean;
+    data: Uint8Array<ArrayBuffer>;
+  }): void {
+    const pixelBytes = frame.width * frame.height * 4;
+    let rgba = this.#rawRgba;
+    if (!rgba || rgba.length !== pixelBytes) {
+      rgba = new Uint8ClampedArray(pixelBytes);
+      this.#rawRgba = rgba;
+    }
+    if (!this.#rawImageData || this.#rawImageData.width !== frame.width || this.#rawImageData.height !== frame.height) {
+      this.#rawImageData = new ImageData(rgba, frame.width, frame.height);
+    }
+
+    decodeRawImage(
+      {
+        encoding: frame.encoding,
+        width: frame.width,
+        height: frame.height,
+        step: frame.step,
+        is_bigendian: frame.isBigEndian,
+        data: frame.data,
+      },
+      rgba,
+      this.#rawDecodeOptions,
+    );
+
+    this.#disposeCachedBitmap();
+    this.#cachedFrame = {
+      kind: 'raw',
+      width: frame.width,
+      height: frame.height,
+      encoding: frame.encoding,
+      step: frame.step,
+      isBigEndian: frame.isBigEndian,
+      data: frame.data,
+      receiveTime: frame.receiveTime,
+    };
+
+    this.#drawRawImageData(frame.width, frame.height);
+    this.#emitStatus({
+      phase: 'ready',
+      width: frame.width,
+      height: frame.height,
+      encoding: frame.encoding,
+      receiveTime: frame.receiveTime,
+    });
   }
 
   /** Re-decode the last raw frame with current rawDecodeOptions and redraw. */
@@ -611,7 +645,7 @@ class ImageRenderWorkerRuntime {
     data: Uint8Array<ArrayBuffer>,
     format: string,
   ): Promise<ImageBitmap | VideoFrame> {
-    const mime = normalizeCompressedMime(format);
+    const mime = normalizeCompressedMime(format, data);
     if (typeof ImageDecoder !== 'undefined') {
       let supported = this.#imageDecoderMimeSupported.get(mime);
       if (supported === undefined) {

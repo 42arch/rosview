@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  depthEncodingFromFormat,
   getCompressedKind,
+  isCompressedDepthFormat,
   isCompressedVideoMessage,
   isH264CompressedFrameMessage,
   isImagePanelTopicSchema,
   isRawImageTopicSchema,
   normalizeCompressedMime,
+  parseCompressedImageFormat,
   prepareImageWorkerBytes,
+  sniffCompressedMime,
   snapshotBytes,
 } from './imageTypes';
 
@@ -114,11 +118,74 @@ describe('isImagePanelTopicSchema', () => {
   });
 });
 
+describe('parseCompressedImageFormat', () => {
+  it('parses jpeg color transport strings', () => {
+    expect(parseCompressedImageFormat('rgb8; jpeg compressed bgr8')).toEqual({
+      rawEncoding: 'rgb8',
+      transport: 'jpeg compressed bgr8',
+      depthCodec: undefined,
+      bitmapKind: 'jpeg',
+    });
+  });
+
+  it('parses compressed depth transport strings', () => {
+    expect(parseCompressedImageFormat('16UC1; compressedDepth')).toEqual({
+      rawEncoding: '16uc1',
+      transport: 'compressedDepth',
+      depthCodec: 'png',
+      bitmapKind: null,
+    });
+    expect(parseCompressedImageFormat('32FC1; compressedDepth')).toMatchObject({
+      rawEncoding: '32fc1',
+      depthCodec: 'png',
+    });
+    expect(parseCompressedImageFormat('16UC1; compressedDepth rvl')).toMatchObject({
+      rawEncoding: '16uc1',
+      depthCodec: 'rvl',
+    });
+  });
+});
+
+describe('isCompressedDepthFormat', () => {
+  it('recognizes ROS compressed depth formats', () => {
+    expect(isCompressedDepthFormat('16UC1; compressedDepth')).toBe(true);
+    expect(isCompressedDepthFormat('32FC1; compressedDepth')).toBe(true);
+    expect(isCompressedDepthFormat('rgb8; jpeg compressed bgr8')).toBe(false);
+  });
+});
+
+describe('depthEncodingFromFormat', () => {
+  it('returns normalized depth encodings for compressed depth formats', () => {
+    expect(depthEncodingFromFormat('16UC1; compressedDepth')).toBe('16uc1');
+    expect(depthEncodingFromFormat('32FC1; compressedDepth')).toBe('32fc1');
+    expect(depthEncodingFromFormat('rgb8; jpeg compressed bgr8')).toBeNull();
+  });
+});
+
+describe('sniffCompressedMime', () => {
+  it('detects jpeg and png magic bytes', () => {
+    expect(sniffCompressedMime(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
+    expect(
+      sniffCompressedMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    ).toBe('image/png');
+  });
+});
+
 describe('normalizeCompressedMime', () => {
   it('falls back to JPEG for raw-style format tokens on CompressedImage', () => {
     expect(getCompressedKind('bgr8')).toBeNull();
-    expect(normalizeCompressedMime('bgr8')).toBe('image/jpeg');
-    expect(normalizeCompressedMime('rgb8')).toBe('image/jpeg');
+    expect(normalizeCompressedMime('bgr8', new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
+    expect(normalizeCompressedMime('rgb8', new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
+  });
+
+  it('does not treat compressed depth formats as JPEG', () => {
+    expect(() => normalizeCompressedMime('16UC1; compressedDepth')).toThrow(/Compressed depth/);
+  });
+
+  it('sniffs PNG when raw encoding token is unknown but payload is PNG', () => {
+    expect(
+      normalizeCompressedMime('16UC1', new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    ).toBe('image/png');
   });
 
   it('still recognizes explicit codec hints in compound format strings', () => {
