@@ -15,10 +15,12 @@ import {
   type FoxgloveLayoutData,
   type FoxgloveMosaicNode,
 } from '@/core/preferences/foxgloveLayout';
-import { planColorDepthCameraRows } from '@/features/layout/autoLayout/planRosImageGrid';
+import { planColorDepthCameraRows, isDepthImageTopicName } from '@/features/layout/autoLayout/planRosImageGrid';
+import { buildImageRows } from '@/features/layout/autoLayout/buildImageRows';
+import { selectImageTopicsForAutoLayout } from '@/features/layout/autoLayout/imageTopicSelection';
 import { heuristicAudioInfoTopics } from '@/features/panels/Audio/core/resolveAudioInfo';
 import { getPanelDefinition } from '@/features/panels/registry';
-import { isAudioCommonInfoSchema, isJointStateSchema, isRawAudioSchema, normalizeRosSchemaName } from '@/shared/ros/rosMessageTypes';
+import { isAudioCommonInfoSchema, isJointStateSchema, isRawAudioSchema, isRosImageSchema, normalizeRosSchemaName } from '@/shared/ros/rosMessageTypes';
 import { pickDefaultRawMessagesTopic } from '@/features/layout/autoLayout/pickDefaultRawMessagesTopic';
 
 function imageTabTitle(topic: string): string {
@@ -230,24 +232,41 @@ export function buildDefaultRosFoxgloveLayoutData(
   topics: ReadonlyArray<TopicInfo>,
   options?: BuildDefaultRosLayoutOptions,
 ): FoxgloveLayoutData {
-  const { colorRow, depthRow } = planColorDepthCameraRows(topics);
   const configById: Record<string, FoxgloveConfig> = {};
   const hdf5Dataset = isHdf5Dataset(topics, options?.publishersByTopic);
 
   const stackParts: FoxgloveMosaicNode[] = [];
   const usedImageTopics = new Set<string>();
-  const colorImageIds = appendImagePanelsForRow(colorRow, configById);
-  const depthImageIds = appendImagePanelsForRow(depthRow, configById);
-  for (const topic of colorRow) {
-    if (topic) usedImageTopics.add(topic);
+
+  const pickedImageTopics = selectImageTopicsForAutoLayout(topics);
+  const hasDepthImageStreams = topics.some(
+    (topic) => isRosImageSchema(topic.type) && isDepthImageTopicName(topic.name),
+  );
+
+  if (hasDepthImageStreams) {
+    const { colorRow, depthRow } = planColorDepthCameraRows(topics);
+    const colorImageIds = appendImagePanelsForRow(colorRow, configById);
+    const depthImageIds = appendImagePanelsForRow(depthRow, configById);
+    for (const topic of colorRow) {
+      if (topic) usedImageTopics.add(topic);
+    }
+    for (const topic of depthRow) {
+      if (topic) usedImageTopics.add(topic);
+    }
+    const colorMosaic = rowMosaicFromPanelIds(colorImageIds);
+    const depthMosaic = rowMosaicFromPanelIds(depthImageIds);
+    if (colorMosaic) stackParts.push(colorMosaic);
+    if (depthMosaic) stackParts.push(depthMosaic);
+  } else if (pickedImageTopics.length > 0) {
+    for (const row of buildImageRows(pickedImageTopics)) {
+      const imageIds = appendImagePanelsForRow(row, configById);
+      for (const topic of row) {
+        usedImageTopics.add(topic);
+      }
+      const mosaic = rowMosaicFromPanelIds(imageIds);
+      if (mosaic) stackParts.push(mosaic);
+    }
   }
-  for (const topic of depthRow) {
-    if (topic) usedImageTopics.add(topic);
-  }
-  const colorMosaic = rowMosaicFromPanelIds(colorImageIds);
-  const depthMosaic = rowMosaicFromPanelIds(depthImageIds);
-  if (colorMosaic) stackParts.push(colorMosaic);
-  if (depthMosaic) stackParts.push(depthMosaic);
 
   const audioTopicCandidates = collectTopicsForPanelSchemas(topics, 'Audio')
     .sort((a, b) => audioTopicPriorityScore(b) - audioTopicPriorityScore(a) || a.localeCompare(b))

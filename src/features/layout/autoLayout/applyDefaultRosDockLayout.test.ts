@@ -202,4 +202,35 @@ describe('buildDefaultRosFoxgloveLayoutData', () => {
     expect(rawSnapshots).toHaveLength(1);
     expect((rawSnapshots[0]?.config as { topic?: string }).topic).toBe('/observations/joint_states');
   });
+
+  it('lays out six NuScenes protobuf CompressedImage streams without RawMessages fallback', () => {
+    const topics: TopicInfo[] = [
+      { name: '/CAM_FRONT/image_rect_compressed', type: 'foxglove.CompressedImage' },
+      { name: '/CAM_FRONT_LEFT/image_rect_compressed', type: 'foxglove.CompressedImage' },
+      { name: '/CAM_FRONT_RIGHT/image_rect_compressed', type: 'foxglove.CompressedImage' },
+      { name: '/CAM_BACK/image_rect_compressed', type: 'foxglove.CompressedImage' },
+      { name: '/CAM_BACK_LEFT/image_rect_compressed', type: 'foxglove.CompressedImage' },
+      { name: '/CAM_BACK_RIGHT/image_rect_compressed', type: 'foxglove.CompressedImage' },
+      { name: '/imu', type: 'IMU' },
+    ];
+
+    const data = buildDefaultRosFoxgloveLayoutData(topics);
+    const ids = collectMosaicPanelIds(data.layout);
+    const panelTypes = ids.map((id) => getPanelTypeFromId(id));
+    expect(panelTypes.filter((type) => type === 'Image')).toHaveLength(6);
+    expect(panelTypes.filter((type) => type === 'RawMessages')).toHaveLength(0);
+
+    const imageTopics = Object.values(data.configById)
+      .map((config) => (config as { topic?: string }).topic)
+      .filter((topic): topic is string => Boolean(topic))
+      .sort();
+    expect(imageTopics).toEqual([
+      '/CAM_BACK/image_rect_compressed',
+      '/CAM_BACK_LEFT/image_rect_compressed',
+      '/CAM_BACK_RIGHT/image_rect_compressed',
+      '/CAM_FRONT/image_rect_compressed',
+      '/CAM_FRONT_LEFT/image_rect_compressed',
+      '/CAM_FRONT_RIGHT/image_rect_compressed',
+    ]);
+  });
 });

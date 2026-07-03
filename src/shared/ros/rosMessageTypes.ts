@@ -34,11 +34,29 @@ export function isJointStateSchema(type: string): boolean {
 }
 
 export function isRosImageSchema(type: string): boolean {
-  return (
+  if (
     matchesRosSchema(type, ROS_MSG_SENSOR_IMAGE) ||
     matchesRosSchema(type, ROS_MSG_SENSOR_COMPRESSED_IMAGE) ||
     matchesRosSchema(type, ROS_MSG_FOXGLOVE_COMPRESSED_VIDEO)
-  );
+  ) {
+    return true;
+  }
+
+  const normalized = normalizeRosSchemaName(type);
+  if (normalized.includes('compressedimage')) {
+    return true;
+  }
+  if (normalized.includes('compressedvideo')) {
+    return true;
+  }
+  if (
+    /\/image$/i.test(normalized) &&
+    !normalized.includes('camerainfo') &&
+    !normalized.includes('annotations')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function isPoseStampedSchema(type: string): boolean {

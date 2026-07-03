@@ -63,7 +63,10 @@ describe('rosMessageTypes', () => {
     expect(isRosImageSchema('sensor_msgs/msg/Image')).toBe(true);
     expect(isRosImageSchema('sensor_msgs/msg/CompressedImage')).toBe(true);
     expect(isRosImageSchema(ROS_MSG_FOXGLOVE_COMPRESSED_VIDEO)).toBe(true);
+    expect(isRosImageSchema('foxglove.CompressedImage')).toBe(true);
     expect(isRosImageSchema('sensor_msgs/msg/CameraInfo')).toBe(false);
+    expect(isRosImageSchema('foxglove.ImageAnnotations')).toBe(false);
+    expect(isRosImageSchema('foxglove.CameraCalibration')).toBe(false);
   });
 
   it('detects RawAudio and audio panel main schemas', () => {

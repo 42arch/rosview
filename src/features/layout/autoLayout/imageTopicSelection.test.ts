@@ -54,6 +54,18 @@ describe('selectImageTopicsForAutoLayout', () => {
     ]);
   });
 
+  it('includes foxglove protobuf CompressedImage topics', () => {
+    const topics: TopicInfo[] = [
+      { name: '/CAM_FRONT/image_rect_compressed', type: 'foxglove.CompressedImage' },
+      { name: '/CAM_BACK/image_rect_compressed', type: 'foxglove.CompressedImage' },
+    ];
+    const picked = selectImageTopicsForAutoLayout(topics);
+    expect(picked).toEqual([
+      '/CAM_BACK/image_rect_compressed',
+      '/CAM_FRONT/image_rect_compressed',
+    ]);
+  });
+
   it('keeps distinct non-overlapping streams', () => {
     const topics: TopicInfo[] = [
       { name: '/camera/left/color/image_resized/compressed', type: 'sensor_msgs/msg/CompressedImage' },
