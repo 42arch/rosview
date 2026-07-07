@@ -98,7 +98,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (!searchQuery.trim()) return topics;
     const lowerQ = searchQuery.toLowerCase();
     return topics.filter(
-      (t: TopicInfo) => t.name.toLowerCase().includes(lowerQ) || t.type.toLowerCase().includes(lowerQ),
+      (t: TopicInfo) =>
+        t.name.toLowerCase().includes(lowerQ) ||
+        t.type.toLowerCase().includes(lowerQ) ||
+        (t.encoding && t.encoding.toLowerCase().includes(lowerQ)),
     );
   }, [topics, searchQuery]);
 

@@ -128,6 +128,7 @@ export class RosDb3IterableSource implements IIterableSource {
         messageCount: numMessages,
         durationSec,
         frequency: frequency > 0 ? frequency : undefined,
+        encoding: topicDef.serializationFormat,
       };
       topics.push(topic);
       topicStats[topicDef.name] = {

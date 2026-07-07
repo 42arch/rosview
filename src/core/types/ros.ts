@@ -21,6 +21,7 @@ export interface TopicInfo {
    * is unaffected.
    */
   sourceLabels?: string[];
+  encoding?: string;
 }
 
 /** ROS datatype definitions keyed by schema name (payload shape is source-dependent). */

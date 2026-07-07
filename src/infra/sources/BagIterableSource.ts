@@ -127,12 +127,13 @@ export class BagIterableSource implements IIterableSource {
             : undefined;
         const frequency =
           durationSec != null && durationSec > 0 && messageCount > 1 ? (messageCount - 1) / durationSec : 0;
-        topics.push({
+         topics.push({
           name: connection.topic,
           type: schemaName,
           messageCount,
           durationSec,
           frequency: frequency > 0 ? frequency : undefined,
+          encoding: 'ros1',
         });
         topicStats[connection.topic] = {
           messageCount,

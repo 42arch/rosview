@@ -53,6 +53,9 @@ export const TopicRow: React.FC<TopicRowProps> = ({ topic, isSelected, onSelect 
 
   const rowTitle = (() => {
     const lines = [topic.name, topic.type];
+    if (topic.encoding) {
+      lines.push(`Encoding: ${topic.encoding}`);
+    }
     if (metrics.secondary) {
       lines.push(metrics.secondary);
     }
@@ -93,7 +96,14 @@ export const TopicRow: React.FC<TopicRowProps> = ({ topic, isSelected, onSelect 
       >
         <div className="min-w-0 flex-1 flex flex-col gap-1">
           <div className="truncate text-[12px] font-medium leading-4">{topic.name}</div>
-          <div className="truncate text-[10px] leading-4 text-muted-foreground">{topic.type}</div>
+          <div className="truncate text-[10px] leading-4 text-muted-foreground">
+            {topic.type}
+            {topic.encoding && (
+              <span className="text-muted-foreground/60">
+                {` (${topic.encoding.toLowerCase()})`}
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex flex-col justify-end items-end gap-1">
           {(metrics.primary || metrics.secondary) && (
