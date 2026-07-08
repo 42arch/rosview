@@ -133,6 +133,7 @@ export class BagIterableSource implements IIterableSource {
           messageCount,
           durationSec,
           frequency: frequency > 0 ? frequency : undefined,
+          encoding: 'ros1',
         });
         topicStats[connection.topic] = {
           messageCount,

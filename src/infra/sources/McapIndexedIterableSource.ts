@@ -98,6 +98,7 @@ export class McapIndexedIterableSource implements IIterableSource {
         topics.push({
           name: channel.topic,
           type: schema?.name ?? "unknown",
+          encoding: channel.messageEncoding,
         });
 
         if (!publishersByTopic[channel.topic]) {

@@ -14,6 +14,7 @@ export interface TopicInfo {
   messageCount?: number;
   frequency?: number;
   durationSec?: number;
+  encoding?: string;
 }
 
 /** ROS datatype definitions keyed by schema name (payload shape is source-dependent). */
